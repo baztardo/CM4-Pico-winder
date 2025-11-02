@@ -8,7 +8,7 @@ echo "Setting up Klipper + Mainsail for CNC Winder..."
 sudo apt update && sudo apt upgrade -y
 
 # Install dependencies
-sudo apt install -y git python3-numpy python3-matplotlib
+sudo apt install -y git python3-numpy python3-matplotlib chromium-browser
 
 # Install Klipper
 echo "Installing Klipper..."
@@ -27,6 +27,15 @@ sudo apt install -y unzip nginx
 sudo unzip mainsail.zip -d /var/www/mainsail
 sudo chown -R www-data:www-data /var/www/mainsail
 
+# Configure touchscreen auto-start
+sudo tee /home/pi/.xsession > /dev/null <<EOF
+#!/bin/sh
+xset -dpms
+xset s off
+chromium-browser --kiosk --app=http://localhost --no-first-run --disable-infobars --disable-session-crashed-bubble --disable-component-update
+EOF
+sudo chmod +x /home/pi/.xsession
+
 # Configure Nginx
 sudo tee /etc/nginx/sites-available/mainsail > /dev/null <<EOF
 server {
@@ -34,11 +43,11 @@ server {
     server_name _;
     root /var/www/mainsail;
     index index.html;
-    
+
     location / {
         try_files $uri $uri/ /index.html;
     }
-    
+
     location /websocket {
         proxy_pass http://127.0.0.1:7125/websocket;
         proxy_http_version 1.1;
@@ -65,7 +74,25 @@ cd moonraker
 
 # Copy CNC winder config
 echo "Setting up CNC winder config..."
-cp ~/CM4-Pico-winder/cnc_winder_config.cfg ~/klipper_config.cfg
+cp ~/CM4-Pico-winder/config/cnc_winder_config.cfg ~/klipper_config.cfg
+
+# Configure touchscreen (if present)
+if [ -e "/dev/fb0" ] || [ -e "/dev/fb1" ]; then
+    echo "Touchscreen detected - configuring auto-start..."
+    sudo apt install -y xserver-xorg xinit openbox lightdm
+    sudo tee /usr/share/X11/xorg.conf.d/99-fbturbo.conf > /dev/null <<EOF
+Section "Device"
+    Identifier "Allwinner A10/A13 FBDEV"
+    Driver "fbturbo"
+    Option "fbdev" "/dev/fb0"
+    Option "SwapbuffersWait" "true"
+EndSection
+EOF
+    sudo systemctl enable lightdm
+    sudo systemctl set-default graphical.target
+else
+    echo "No touchscreen detected - web interface available at http://YOUR_CM4_IP"
+fi
 
 # Start services
 sudo systemctl enable klipper
