@@ -1,5 +1,0 @@
----
-triple:          'arm64-apple-darwin'
-binary-path:     'out/lib/elf2uf2/elf2uf2'
-relocations:     []
-...

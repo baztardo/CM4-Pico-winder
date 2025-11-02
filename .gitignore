@@ -1,0 +1,247 @@
+# CNC Pickup Winder - .gitignore
+# Excludes build artifacts, temporary files, and other files that shouldn't be tracked
+
+# =============================================================================
+# BUILD OUTPUTS
+# =============================================================================
+
+# Klipper firmware build outputs
+out/
+*.elf
+*.uf2
+*.bin
+*.hex
+*.dis
+*.map
+
+# Object files and dependencies
+*.o
+*.d
+*.a
+*.so
+
+# Build directories and artifacts
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# =============================================================================
+# TEMPORARY FILES
+# =============================================================================
+
+# General temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# macOS temporary files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows temporary files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux temporary files
+*~
+
+# =============================================================================
+# IDE / EDITOR FILES
+# =============================================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Cursor
+.cursor/
+
+# Vim
+*.swp
+*.swo
+Session.vim
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# JetBrains IDEs
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Eclipse
+.project
+.classpath
+.settings/
+
+# =============================================================================
+# PYTHON
+# =============================================================================
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# pytest
+.pytest_cache/
+
+# =============================================================================
+# LOGS AND DEBUG
+# =============================================================================
+
+*.log
+*.log.*
+logs/
+debug.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Core dumps
+core
+core.*
+
+# =============================================================================
+# DOCUMENTATION BUILD
+# =============================================================================
+
+# Sphinx documentation
+docs/_build/
+
+# Doxygen
+html/
+latex/
+
+# =============================================================================
+# OS SPECIFIC
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# =============================================================================
+# TOOLS AND DEPENDENCIES
+# =============================================================================
+
+# Toolchains (if downloaded)
+tools/
+arm-gnu-toolchain*/
+gcc-arm-none-eabi*/
+
+# Node modules (if any)
+node_modules/
+
+# =============================================================================
+# SENSITIVE DATA
+# =============================================================================
+
+# API keys, passwords, etc.
+.env
+.env.local
+.env.*.local
+secrets.json
+config.local.*
+
+# SSH keys
+*.pem
+*.key
+*.p12
+
+# =============================================================================
+# BACKUPS AND ARCHIVES
+# =============================================================================
+
+*.tar.gz
+*.zip
+*.7z
+*.rar
+*.bak
+
+# =============================================================================
+# PROJECT SPECIFIC
+# =============================================================================
+
+# CNC Winder specific
+calibration_data/
+test_results/
+winding_logs/
+
+# Klipper config backups
+printer-*.cfg.bak
+mainsail_config.bak
+
+# Temporary test files
+test_*.py
+debug_*.py
+
+# Screenshots and captures
+*.png
+*.jpg
+*.jpeg
+*.gif
+screenshots/
