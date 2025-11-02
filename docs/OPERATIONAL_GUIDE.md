@@ -20,25 +20,25 @@ cp out/klipper.uf2 /media/YOUR_USER/RPI-RP2/
 ### Step 3: Host Software Setup
 ```bash
 # On CM4
-./setup_klipper_mainsail.sh
+./setup_cnc_winder.sh
 # Access web interface at http://cm4-ip
 ```
 
 ## PHASE 2: SYSTEM INITIALIZATION
 ### Step 4: Power-On Sequence
 1. **CM4 boots Linux** (30-60 seconds)
-2. **Klipper service starts** (connects to Pico)
-3. **Mainsail web UI loads** (shows connection status)
+2. **Firmware host service starts** (connects to Pico)
+3. **Web interface loads** (shows connection status)
 4. **Pico firmware initializes** (GPIO, timers, interrupts)
 
 ### Step 5: Configuration
-- **Mainsail UI**: Load `cnc_winder_config.cfg`
+- **Web interface**: Load `cnc_winder_config.cfg`
 - **Pico responds**: `cnc_winder_configured pins=...`
 - **System enters**: SYSTEM_READY state
 
 ## PHASE 3: HOMING & CALIBRATION
 ### Step 6: Homing Sequence
-1. **Press 'HOME_ALL'** in Mainsail
+1. **Press 'HOME_ALL'** in the web interface
 2. **Traverse moves** to endstop (crash prevention)
 3. **Pickup positions** to safe location
 4. **BLDC spindle** zeros RPM counter
