@@ -1,0 +1,27 @@
+# Compare: 3D Printer vs CNC Winder Config
+
+# 3D PRINTER (Typical Klipper config):
+[stepper_x]
+step_pin: arduino:2
+dir_pin: arduino:3
+enable_pin: arduino:4
+microsteps: 16
+rotation_distance: 40      # mm per revolution
+endstop_pin: arduino:5
+position_min: 0
+position_max: 200
+homing_speed: 50
+
+# CNC WINDER (Our config):
+[stepper main_winder]
+step_pin: pico:gpio0
+dir_pin: pico:gpio1
+enable_pin: pico:gpio2
+microsteps: 16
+rotation_distance: 360     # DEGREES per revolution (not mm!)
+endstop_pin: pico:gpio3
+# No position limits - we wind continuously!
+
+# 3D Printer G-code: G1 X100 Y50 Z10 F1000 (move in 3D space)
+# CNC Winder G-code: G1 X5000 F800 (wind 5000 turns at speed 800)
+

@@ -1,0 +1,258 @@
+================================================================
+ANSWERS TO YOUR QUESTIONS
+================================================================
+
+QUESTION 1: "What to put in scripts/kconfig/ ?"
+QUESTION 2: "Would pulse_counter.c be useful?"
+
+================================================================
+ANSWER 1: scripts/kconfig/ Directory
+================================================================
+
+WHAT IT IS:
+  The "make menuconfig" system - graphical configuration tool
+
+WHAT TO PUT THERE:
+  EVERYTHING from klipper-full/scripts/
+
+HOW TO COPY:
+  cp -r ~/klipper-full/scripts ~/klipper-minimal/
+
+WHY YOU NEED IT:
+  Without it: "make menuconfig" won't work
+  With it: Nice graphical menu to configure RP2040
+
+SEE: SCRIPTS_KCONFIG.txt for details
+
+================================================================
+ANSWER 2: pulse_counter.c
+================================================================
+
+YES! USE IT! It's BETTER than custom_encoder.c!
+
+WHAT IT IS:
+  Klipper's built-in high-speed pulse counter
+  Perfect for encoders, tachometers, frequency measurement
+
+WHY BETTER THAN custom_encoder.c:
+  ✅ Already in Klipper (battle-tested)
+  ✅ Proven on thousands of printers
+  ✅ Simpler code (edge counting vs quadrature)
+  ✅ Lower CPU usage
+  ✅ Good enough for your 600 PPR encoder
+
+REPLACE:
+  ❌ custom_encoder.c (my untested version)
+WITH:
+  ✅ pulse_counter.c (Klipper's proven code)
+
+HOW TO USE:
+  cp ~/klipper-full/src/pulse_counter.c ~/klipper-minimal/src/
+
+SEE: PULSE_COUNTER_VS_CUSTOM_ENCODER.md for details
+
+================================================================
+UPDATED FILE LIST
+================================================================
+
+YOUR CUSTOM CODE:
+✅ config.h              - Pin assignments
+✅ custom_stepper.c      - Motor control
+
+KLIPPER CODE TO USE:
+✅ pulse_counter.c       - Encoder (USE THIS!)
+❌ custom_encoder.c      - Skip this (use pulse_counter.c instead)
+
+CORE KLIPPER:
+✅ sched.c, command.c, basecmd.c
+✅ timer.c, gpio.c, main.c (rp2040)
+✅ All board/*.h headers
+✅ scripts/kconfig/ (menuconfig system)
+
+================================================================
+SIMPLIFIED COPY COMMANDS
+================================================================
+
+cd ~/klipper-minimal
+
+# Create directories
+mkdir -p src/{board,generic,rp2040}
+
+# Copy CORE system
+cp ~/klipper-full/src/sched.{c,h} src/
+cp ~/klipper-full/src/command.{c,h} src/
+cp ~/klipper-full/src/basecmd.{c,h} src/
+cp ~/klipper-full/src/ctr.h src/
+cp ~/klipper-full/src/compiler.h src/
+
+# Copy BOARD headers (into board/ directory!)
+cp ~/klipper-full/src/board/*.h src/board/
+
+# Copy GENERIC ARM
+cp ~/klipper-full/src/generic/armcm_boot.{c,h} src/generic/
+cp ~/klipper-full/src/generic/armcm_reset.h src/generic/
+cp ~/klipper-full/src/generic/timer_irq.{c,h} src/generic/
+
+# Copy RP2040 specific
+cp ~/klipper-full/src/rp2040/* src/rp2040/
+
+# Copy PULSE COUNTER (for encoder)
+cp ~/klipper-full/src/pulse_counter.c src/
+
+# Copy BUILD SYSTEM
+cp ~/klipper-full/Makefile .
+cp ~/klipper-full/Kconfig .
+cp -r ~/klipper-full/scripts .
+
+# Add YOUR custom files
+cp config.h src/
+cp custom_stepper.c src/
+
+# DON'T copy custom_encoder.c (use pulse_counter.c instead!)
+
+================================================================
+EDIT src/Makefile
+================================================================
+
+FIND this section and DELETE 3D printer code:
+❌ src-y += stepper.c endstop.c trsync.c
+❌ src-y += extruder.c heater.c ...
+
+ADD your code:
+✅ src-y += custom_stepper.c
+✅ src-y += pulse_counter.c
+
+Example src/Makefile:
+```makefile
+# Core system
+src-y += sched.c command.c basecmd.c
+
+# YOUR code
+src-y += custom_stepper.c
+src-y += pulse_counter.c
+
+# RP2040
+src-$(CONFIG_MACH_RPXXXX) += rp2040/main.c rp2040/timer.c
+src-$(CONFIG_MACH_RPXXXX) += rp2040/gpio.c rp2040/usbserial.c
+
+# Generic
+src-y += generic/timer_irq.c generic/armcm_boot.c
+```
+
+================================================================
+BUILD & FLASH
+================================================================
+
+cd ~/klipper-minimal
+
+# Configure (uses scripts/kconfig/)
+make menuconfig
+  Select: RP2040, USB, No bootloader, 125MHz
+
+# Compile
+make clean
+make -j4
+
+# Flash to Pico
+# Hold BOOTSEL, plug USB, release
+cp out/klipper.uf2 /media/pi/RPI-RP2/
+
+# Verify
+ls /dev/ttyACM0  # Should appear
+
+================================================================
+PYTHON USAGE WITH pulse_counter.c
+================================================================
+
+from serial import Serial
+
+class MotorController:
+    def __init__(self, port='/dev/ttyACM0'):
+        self.ser = Serial(port, 250000)
+        
+        # Configure stepper (custom_stepper.c)
+        self.send("config_custom_stepper oid=0 step_pin=2 dir_pin=3 enable_pin=4")
+        
+        # Configure encoder (pulse_counter.c)
+        self.send("config_counter oid=1 pin=10 pull_up=1")
+        
+        # Start encoder counting
+        now = self.get_clock()
+        # Poll every 20µs (50kHz), report every 100ms
+        self.send(f"query_counter oid=1 clock={now} poll_ticks=20 sample_ticks=100000")
+    
+    def move(self, steps, rpm):
+        steps_per_sec = (rpm * 1600) / 60
+        interval_us = 1000000 / steps_per_sec
+        self.send(f"custom_stepper_move oid=0 direction=0 steps={steps} interval={int(interval_us)}")
+
+    def send(self, cmd):
+        # Implement Klipper protocol
+        pass
+
+# Usage:
+motor = MotorController()
+motor.move(steps=16000, rpm=2500)  # 10 revolutions at max speed
+
+================================================================
+SUMMARY OF CHANGES
+================================================================
+
+ORIGINAL PACKAGE:
+- custom_encoder.c (my untested version)
+
+NEW RECOMMENDATION:
+- pulse_counter.c (Klipper's proven code)
+
+WHY:
+- Already exists and tested
+- Simpler and more reliable
+- Good enough for 600 PPR at 25kHz
+
+Total files: 27 (one less!)
+  - Removed: custom_encoder.c
+  - Added: pulse_counter.c
+
+================================================================
+FINAL FILE COUNT
+================================================================
+
+YOUR CUSTOM:          2 files (config.h, custom_stepper.c)
+KLIPPER CORE:         6 files (sched.c, command.c, basecmd.c, etc.)
+BOARD HEADERS:        5 files (board/*.h)
+GENERIC ARM:          5 files (generic/*.{c,h})
+RP2040 SPECIFIC:     12 files (rp2040/*)
+PULSE COUNTER:        1 file  (pulse_counter.c)
+BUILD SYSTEM:         3 files (Makefile, Kconfig, scripts/)
+-----------------------------------------------------------
+TOTAL:               34 files (including build system)
+
+Much smaller than 200+ in full Klipper!
+
+================================================================
+QUESTIONS ANSWERED?
+================================================================
+
+✅ Q1: What to put in scripts/kconfig/?
+   A1: Copy entire scripts/ directory from klipper-full
+       It's the menuconfig system - you need it!
+
+✅ Q2: Would pulse_counter.c be useful?
+   A2: YES! Use it INSTEAD of custom_encoder.c
+       It's better, tested, and simpler!
+
+================================================================
+READ THESE FILES:
+================================================================
+
+1. SCRIPTS_KCONFIG.txt              - scripts/ explanation
+2. PULSE_COUNTER_VS_CUSTOM_ENCODER.md - Why pulse_counter.c is better
+3. EXACT_FILES_NEEDED.txt           - Complete file list
+
+================================================================
+YOU'RE READY TO BUILD!
+================================================================
+
+Copy commands above, build with "make menuconfig", flash to Pico.
+
+Good catch on both questions! Using pulse_counter.c is the right choice.

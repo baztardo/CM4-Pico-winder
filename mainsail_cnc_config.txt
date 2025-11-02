@@ -1,0 +1,31 @@
+# CNC Winder Dashboard Configuration
+# Add to Mainsail settings for CNC-specific interface
+
+# Custom Macros Panel (add these to Mainsail dashboard)
+# These will appear as touch buttons on your interface
+
+WIND_COIL TURNS=5000 SPEED=1000    # Wind 5000 turns at speed 1000
+WIND_COIL TURNS=10000 SPEED=800    # Wind 10000 turns at speed 800  
+WIND_COIL TURNS=25000 SPEED=600    # Wind 25000 turns at speed 600
+
+HOME_ALL                            # Home all motors
+EMERGENCY_STOP                      # Emergency stop
+
+# Status Display Items (add to dashboard)
+# - main_winder:position
+# - pickup_arm:position  
+# - winding_encoder:count
+# - pico:temp
+
+# CNC Winder Operation:
+# 1. HOME_ALL to calibrate positions
+# 2. Select WIND_COIL macro with desired turns/speed
+# 3. Monitor winding_encoder:count for progress
+# 4. Use EMERGENCY_STOP if needed
+
+# The interface will show:
+# - Motor positions in degrees (not mm)
+# - Encoder counts (wire length/coil turns)
+# - Temperature monitoring
+# - Touch buttons for common operations
+

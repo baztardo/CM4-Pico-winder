@@ -1,0 +1,161 @@
+================================================================
+WHAT IS scripts/kconfig/ ?
+================================================================
+
+SIMPLE ANSWER:
+It's the "make menuconfig" system - the graphical configuration tool.
+
+================================================================
+WHAT IT DOES:
+================================================================
+
+When you run:
+  make menuconfig
+
+You see this nice menu:
+  
+  ┌──────────────────────────────────────────────┐
+  │ Klipper Firmware Configuration               │
+  │                                              │
+  │  Micro-controller Architecture (RP2040)      │
+  │    [*] Raspberry Pi RP2040                   │
+  │                                              │
+  │  Processor model                             │
+  │    [ ] rp2040 (150 Mhz)                      │
+  │    [*] rp2040 (125 Mhz)                      │
+  │                                              │
+  │  Communication interface                     │
+  │    [*] USB                                   │
+  │    [ ] Serial                                │
+  │                                              │
+  │  Bootloader offset                           │
+  │    [*] No bootloader                         │
+  │                                              │
+  │    < Select >    < Exit >    < Help >        │
+  └──────────────────────────────────────────────┘
+
+This generates the .config file automatically!
+
+================================================================
+WITHOUT scripts/kconfig/:
+================================================================
+
+❌ "make menuconfig" won't work
+❌ Error: "scripts/kconfig/mconf not found"
+❌ You'd have to edit .config by hand (painful!)
+
+Example .config you'd edit manually:
+  CONFIG_MACH_RPXXXX=y
+  CONFIG_MACH_RP2040=y
+  CONFIG_CLOCK_FREQ=125000000
+  CONFIG_USBSERIAL=y
+  ... 50+ more lines ...
+
+================================================================
+WITH scripts/kconfig/:
+================================================================
+
+✅ "make menuconfig" works
+✅ Nice graphical interface
+✅ Use arrow keys to navigate
+✅ Press space to select options
+✅ Auto-generates .config
+✅ Much easier!
+
+================================================================
+HOW TO COPY IT:
+================================================================
+
+Option 1: Copy entire scripts/ directory (easiest)
+  cp -r ~/klipper-full/scripts ~/klipper-minimal/
+
+Option 2: Copy just kconfig (minimal)
+  mkdir -p ~/klipper-minimal/scripts
+  cp -r ~/klipper-full/scripts/kconfig ~/klipper-minimal/scripts/
+
+================================================================
+WHAT'S IN scripts/kconfig/?
+================================================================
+
+scripts/kconfig/
+├── mconf           ← The menuconfig program (compiled)
+├── conf            ← Configuration tool
+├── *.c files       ← Source code for menuconfig
+├── lxdialog/       ← Dialog UI library
+└── ... etc
+
+It's a self-contained configuration system.
+
+Size: ~1-2 MB (small)
+
+================================================================
+DO YOU NEED IT?
+================================================================
+
+YES - You need it to run "make menuconfig"
+
+Alternative (if you skip it):
+- Create .config manually
+- Copy example .config from someone
+- Much harder to configure!
+
+Just copy it - it's worth it!
+
+================================================================
+VERIFICATION:
+================================================================
+
+After copying, check:
+
+ls ~/klipper-minimal/scripts/kconfig/
+# Should see files like: mconf, conf, *.c, lxdialog/
+
+Try menuconfig:
+cd ~/klipper-minimal
+make menuconfig
+# Should open graphical menu
+
+================================================================
+COMPLETE COPY COMMANDS:
+================================================================
+
+cd ~/klipper-minimal
+
+# Copy scripts directory
+cp -r ~/klipper-full/scripts .
+
+# Also need top-level Kconfig
+cp ~/klipper-full/Kconfig .
+cp ~/klipper-full/Makefile .
+
+# Test it
+make menuconfig
+
+Should work!
+
+================================================================
+SUMMARY:
+================================================================
+
+Q: What is scripts/kconfig/?
+A: The graphical menuconfig system
+
+Q: Do I need it?
+A: YES - makes configuration much easier
+
+Q: How to copy it?
+A: cp -r ~/klipper-full/scripts ~/klipper-minimal/
+
+Q: What if I skip it?
+A: You'll have to edit .config manually (not fun!)
+
+================================================================
+JUST COPY IT!
+================================================================
+
+It's small, self-contained, and makes your life easier.
+
+Command:
+  cp -r ~/klipper-full/scripts ~/klipper-minimal/
+
+Done!
