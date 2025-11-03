@@ -10,8 +10,8 @@
 #include "board/misc.h" // timer_read_time
 #include "command.h" // DECL_COMMAND
 #include "sched.h" // struct timer
-#include "config.h" // Pin definitions
 #include "cnc_winder_config.h" // CNC winder configuration
+#include "config.h" // Pin definitions (after cnc_winder_config.h to override)
 
 // Stepper Motor Structure (our own implementation)
 struct custom_stepper {
@@ -31,7 +31,7 @@ struct custom_stepper {
 struct cnc_winder_config {
     // Stepper motor instances (direct control, no OIDs)
     struct custom_stepper traverse_stepper;  // Side-to-side wire laying
-    struct custom_stepper pickup_stepper;    // Coil winding (optional)
+    // Pickup stepper removed - not used in this design
 
     // BLDC Spindle Configuration (ZS-X11H Driver)
     struct gpio_pwm spindle_pwm;        // PWM speed control
@@ -63,9 +63,9 @@ static void spindle_pwm_init(void) {
     // For 10kHz PWM: cycle_time = 16000000 / 10000 / 255 ≈ 62.75
     winder.spindle_pwm = gpio_pwm_setup(SPINDLE_PWM_PIN, 63, 0); // ~10kHz PWM, 0% duty
 
-    // Initialize direction and brake pins
-    gpio_out_setup(SPINDLE_DIR_PIN, BLDC_DIRECTION_CW); // Default CW
-    gpio_out_setup(SPINDLE_BRAKE_PIN, 0); // Brake OFF
+    // Initialize direction and brake pins - STORE the return values!
+    winder.spindle_dir = gpio_out_setup(SPINDLE_DIR_PIN, BLDC_DIRECTION_CW); // Default CW
+    winder.spindle_brake = gpio_out_setup(SPINDLE_BRAKE_PIN, 0); // Brake OFF
 }
 
 // Set PWM duty cycle (0-100%)
@@ -79,25 +79,6 @@ static void spindle_set_pwm_duty(float duty_percent) {
     gpio_pwm_write(winder.spindle_pwm, pwm_level);
 }
 
-// Set spindle speed in RPM (using calibrated curve from working code)
-static void spindle_set_speed(float rpm) {
-    if (rpm < 0) rpm = 0;
-    if (rpm > MAX_RPM) rpm = MAX_RPM;
-
-    if (rpm > 0) {
-        // Calibrated scaling based on tachometer: S1000 → 1960 RPM actual
-        // Linear interpolation between min and max
-        float min_duty = PWM_DUTY_MIN;  // Minimum duty to start motor
-        float max_duty = PWM_DUTY_MAX;  // Maximum duty
-
-        // Scale RPM to duty cycle
-        float duty_percent = min_duty + (rpm / MAX_RPM) * (max_duty - min_duty);
-        spindle_set_pwm_duty(duty_percent);
-    } else {
-        // Stop PWM
-        spindle_set_pwm_duty(0.0f);
-    }
-}
 
 static void spindle_set_direction(uint8_t clockwise) {
     gpio_out_write(winder.spindle_dir, clockwise ? BLDC_DIRECTION_CW : BLDC_DIRECTION_CCW);
@@ -118,14 +99,29 @@ stepper_timer_callback(struct timer *timer)
 {
     struct custom_stepper *s = container_of(timer, struct custom_stepper, timer);
 
-    // Generate step pulse (toggle step pin)
-    gpio_out_toggle_noirq(s->step_pin);
-
-    // Update position
-    if (s->direction == 0) {
-        s->position++;
+    if (SIMULATION_MODE) {
+        // Simulation: Just update position without GPIO
+        if (s->direction == 0) {
+            s->position++;
+#if SIMULATION_MODE
+            sim_position++;
+#endif
+        } else {
+            s->position--;
+#if SIMULATION_MODE
+            sim_position--;
+#endif
+        }
     } else {
-        s->position--;
+        // Real hardware: Generate step pulse
+        gpio_out_toggle_noirq(s->step_pin);
+
+        // Update position
+        if (s->direction == 0) {
+            s->position++;
+        } else {
+            s->position--;
+        }
     }
 
     // Check if move complete
@@ -210,7 +206,7 @@ stepper_enable(struct custom_stepper *s, uint8_t enable)
     irq_enable();
 }
 
-// BLDC spindle state
+// BLDC spindle state (always real hardware since spindle works)
 static uint32_t spindle_rpm_target = 0;
 static uint32_t spindle_rpm_measured = 0;
 static int32_t last_rpm_error = 0;
@@ -226,12 +222,41 @@ static uint32_t current_turns = 0;
 static uint8_t winding_active = 0;
 static uint32_t current_layer = 0;
 
+// Simulation state (for steppers when hardware is broken)
+#if SIMULATION_MODE
+static uint32_t sim_position = 0;
+#endif
+
+// Set spindle speed in RPM (using calibrated curve from working code)
+static void spindle_set_speed(float rpm) {
+    if (rpm < 0) rpm = 0;
+    if (rpm > MAX_RPM) rpm = MAX_RPM;
+
+    // Always use real hardware for spindle (it works!)
+    spindle_rpm_target = (uint32_t)rpm;
+
+    if (rpm > 0) {
+        // Calibrated scaling based on tachometer: S1000 → 1960 RPM actual
+        // Linear interpolation between min and max
+        float min_duty = PWM_DUTY_MIN;  // Minimum duty to start motor
+        float max_duty = PWM_DUTY_MAX;  // Maximum duty
+
+        // Scale RPM to duty cycle
+        float duty_percent = min_duty + (rpm / MAX_RPM) * (max_duty - min_duty);
+        spindle_set_pwm_duty(duty_percent);
+    } else {
+        // Stop PWM
+        spindle_set_pwm_duty(0.0f);
+    }
+}
+
 // Hall sensor monitoring for RPM calculation (ZS-X11H driver)
 // Based on working implementation with proper filtering and RPM calculation
 static uint_fast8_t
 hall_sensor_event(struct timer *timer)
 {
-    // Read single Hall sensor for RPM feedback
+    // Always use real hardware for spindle RPM sensing (Hall sensor works!)
+    // Real hardware: Read single Hall sensor for RPM feedback
     uint8_t hall_state = gpio_in_read(winder.hall_sensor);
 
     // Track Hall sensor transitions for RPM calculation
@@ -308,11 +333,7 @@ command_config_cnc_winder(uint32_t *args)
 
     stepper_init(&winder.traverse_stepper, traverse_step, traverse_dir, traverse_en);
 
-    // Optional: Initialize pickup stepper (comment out if not used)
-    // struct gpio_out pickup_step = gpio_out_setup(PICKUP_STEP_PIN, 0);
-    // struct gpio_out pickup_dir = gpio_out_setup(PICKUP_DIR_PIN, 0);
-    // struct gpio_out pickup_en = gpio_out_setup(PICKUP_ENABLE_PIN, 1); // Active LOW
-    // stepper_init(&winder.pickup_stepper, pickup_step, pickup_dir, pickup_en);
+    // Pickup stepper removed - not used in this design
 
     // Initialize BLDC spindle PWM control (ZS-X11H driver)
     spindle_pwm_init();
@@ -327,17 +348,17 @@ command_config_cnc_winder(uint32_t *args)
 
     // Safety pins from config
     winder.emergency_stop_pin = gpio_in_setup(EMERGENCY_STOP_PIN, 0);
-    winder.endstop_pin = gpio_in_setup(ENDSTOP_PIN, 0);
+    // winder.endstop_pin = gpio_in_setup(ENDSTOP_PIN, 0); // Endstop removed
 
     // Initialize Hall sensor monitoring
     hall_sensor_timer.func = hall_sensor_event;
     hall_sensor_timer.waketime = timer_read_time() + timer_from_us(HALL_SENSOR_POLL_US);
     sched_add_timer(&hall_sensor_timer);
 
-    sendf("cnc_winder_configured traverse_pins=%d,%d,%d spindle_pins=%d,%d,%d hall_pin=%d safety_pins=%d,%d",
+    sendf("cnc_winder_configured traverse_pins=%d,%d,%d spindle_pins=%d,%d,%d hall_pin=%d safety_pins=%d",
           TRAVERSE_STEP_PIN, TRAVERSE_DIR_PIN, TRAVERSE_ENABLE_PIN,
           SPINDLE_PWM_PIN, SPINDLE_BRAKE_PIN, SPINDLE_DIR_PIN,
-          SPINDLE_HALL_A_PIN, EMERGENCY_STOP_PIN, ENDSTOP_PIN);
+          SPINDLE_HALL_A_PIN, EMERGENCY_STOP_PIN);
 }
 DECL_COMMAND(command_config_cnc_winder, "config_cnc_winder");
 

@@ -10,11 +10,16 @@ config LOW_LEVEL_OPTIONS
 
 choice
     prompt "Micro-controller Architecture"
+    config MACH_SIMULATOR
+        bool "Software Simulator"
+    config MACH_STM32
+        bool "STMicroelectronics STM32"
     config MACH_RPXXXX
         bool "Raspberry Pi RP2040/RP235x"
 endchoice
 
-
+source "src/simulator/Kconfig"
+source "src/stm32/Kconfig"
 source "src/rp2040/Kconfig"
 
 

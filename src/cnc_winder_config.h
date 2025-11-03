@@ -5,47 +5,43 @@
 #define _CNC_WINDER_CONFIG_H
 
 // ============================================================================
-// HARDWARE PIN CONFIGURATION (SKR Pico)
+// HARDWARE PIN CONFIGURATION (STM32F401RE - CLEO)
 // ============================================================================
 
-// UART Communication (Pi communication)
-#define PI_UART_ID                  uart0
-#define PI_UART_TX_PIN              1
-#define PI_UART_RX_PIN              0
+// UART Communication (CM4 communication)
+#define PI_UART_ID                  USART1
+#define PI_UART_TX_PIN              9                 // PA9
+#define PI_UART_RX_PIN              10                // PA10
 #define PI_UART_BAUD                115200
 
-// BLDC Spindle Motor (ZS-X11H Driver)
-#define SPINDLE_PWM_PIN             3       // PWM speed control
-#define SPINDLE_BRAKE_PIN           7       // Brake control (HIGH=brake ON)
-#define SPINDLE_DIR_PIN             2       // Direction (HIGH=CW, LOW=CCW)
-#define SPINDLE_HALL_A_PIN          15      // Speed feedback (single Hall sensor)
-#define SPINDLE_HALL_MONITOR_PIN    22      // Hall monitoring pin
+// BLDC Spindle Motor (ZS-X11H Driver) - STM32F401RE pins
+#define SPINDLE_PWM_PIN             8                 // PA8 - PWM speed control (TIM1_CH1)
+#define SPINDLE_BRAKE_PIN           16                // PB0 - Brake control (HIGH=brake ON)
+#define SPINDLE_DIR_PIN             17                // PB1 - Direction (HIGH=CW, LOW=CCW)
+#define SPINDLE_HALL_A_PIN          0                 // PA0 - Speed feedback (single Hall sensor)
+#define SPINDLE_HALL_MONITOR_PIN    1                 // PA1 - Hall monitoring pin
 
-// Traverse Stepper Motor (TMC2209)
-#define TRAVERSE_STEP_PIN           5
-#define TRAVERSE_DIR_PIN            4
-#define TRAVERSE_ENABLE_PIN         6
-#define TRAVERSE_HOME_PIN           16
-#define TRAVERSE_DIR_INVERT         1       // Invert direction if needed
+// Traverse Stepper Motor (TMC2209) - STM32F401RE pins
+#define TRAVERSE_STEP_PIN           18                // PB2
+#define TRAVERSE_DIR_PIN            26                // PB10
+#define TRAVERSE_ENABLE_PIN         28                // PB12
+#define TRAVERSE_HOME_PIN           2                 // PA2
+#define TRAVERSE_DIR_INVERT         1                 // Invert direction if needed
 
-// Pickup Stepper Motor (if used)
-#define PICKUP_STEP_PIN             3
-#define PICKUP_DIR_PIN              4
-#define PICKUP_ENABLE_PIN           5
 
 // TMC2209 UART (Shared bus for stepper drivers)
-#define TMC_UART_ID                 uart1
-#define TMC_UART_TX_PIN             8
-#define TMC_UART_RX_PIN             9
+#define TMC_UART_ID                 USART2
+#define TMC_UART_TX_PIN             2                 // PA2
+#define TMC_UART_RX_PIN             3                 // PA3
 #define TMC_UART_BAUD               115200
 
 // Safety & Emergency
-#define EMERGENCY_STOP_PIN          17
-#define ENDSTOP_PIN                 19
+#define EMERGENCY_STOP_PIN          4                 // PA4
+//#define ENDSTOP_PIN                 5                 // PA5
 
 // Heartbeat LEDs
-#define SCHED_HEARTBEAT_PIN         27      // Scheduler heartbeat
-#define ISR_HEARTBEAT_PIN           26      // ISR heartbeat
+#define SCHED_HEARTBEAT_PIN         45                // PC13 - On-board LED (STM32F401RE)
+#define ISR_HEARTBEAT_PIN           46                // PC14 - Extra LED pin
 
 // ============================================================================
 // MECHANICAL PARAMETERS (Actual Hardware)
@@ -59,9 +55,8 @@
 
 // Wire Specifications
 #define WIRE_AWG                    43
-#define WINDING_WIRE_DIA_MM         0.056f  // Actual 43 AWG diameter
-#define WIRE_DIAMETER_MM            0.056f
-#define WIRE_DIAMETER_UM            (uint32_t)(WIRE_DIAMETER_MM * 1000)  // 56 micrometers
+#define WIRE_DIAMETER_MM            0.056f  // Actual 43 AWG diameter (56 micrometers)
+#define WIRE_DIAMETER_UM            (uint32_t)(WIRE_DIAMETER_MM * 1000)  // Auto-calculated
 #define WIRE_TENSION_FACTOR         0.95f   // 5% compression for tight winding
 
 // Traverse Lead Screw
@@ -191,5 +186,9 @@
 // Direction constants
 #define BLDC_DIRECTION_CW           1       // Clockwise
 #define BLDC_DIRECTION_CCW          0       // Counter-clockwise
+
+// Simulation mode for testing without hardware
+#define SIMULATION_MODE             0       // Set to 1 for simulated responses, 0 for real hardware
+                                            // (Spindle works, so use real hardware mode)
 
 #endif // _CNC_WINDER_CONFIG_H
