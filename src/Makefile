@@ -25,6 +25,5 @@ src-$(CONFIG_MACH_RP2350) += rp2040/timer_rp2350.c
 
 # Generic ARM Cortex-M files (conditional to avoid conflicts)
 src-$(CONFIG_MACH_RP2040) += generic/timer_irq.c
-src-y += generic/armcm_boot.c
 
 

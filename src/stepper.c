@@ -1,17 +1,86 @@
-// CNC Pickup Winder Control System
-// Complete stepper motor control for BLDC spindle + dual stepper axes
-//
-// Implements custom stepper control instead of using Klipper's stepper.c
-// Includes BLDC Hall sensor commutation, traverse synchronization, and safety
+// MINIMAL TEST FIRMWARE
+// Just blinks LED on PC13 and prints to serial
 
-#include "basecmd.h" // oid_alloc
-#include "board/gpio.h" // gpio_out_write
-#include "board/irq.h" // irq_disable
-#include "board/misc.h" // timer_read_time
-#include "command.h" // DECL_COMMAND
-#include "sched.h" // struct timer
-#include "cnc_winder_config.h" // CNC winder configuration
-#include "config.h" // Pin definitions (after cnc_winder_config.h to override)
+#include "basecmd.h"
+#include "board/gpio.h"
+#include "board/irq.h"
+#include "board/misc.h"
+#include "command.h"
+#include "sched.h"
+
+// Test multiple possibilities - GPIO might be active-low or different pins
+#define NUM_TEST_PINS 6
+static const uint8_t test_pins[NUM_TEST_PINS] = {5, 13, 16, 17, 18, 45}; // PA5, PA13, PB0, PB1, PB2, PC13
+static uint8_t current_test = 0;
+static uint8_t test_state = 0;
+static uint32_t last_test_time = 0;
+
+// Comprehensive GPIO test
+static uint_fast8_t blink_callback(struct timer *timer) {
+    uint32_t now = timer_read_time();
+
+    // Change test every 3 seconds
+    if (now - last_test_time > 3000000) {  // 3 seconds
+        current_test = (current_test + 1) % NUM_TEST_PINS;
+        test_state = 0;
+        sendf("=== Starting test %d: GPIO pin %d ===", current_test, test_pins[current_test]);
+        last_test_time = now;
+    }
+
+    // Within each test, toggle every 500ms
+    static uint32_t last_toggle_time = 0;
+    if (now - last_toggle_time > 500000) {  // 500ms
+        test_state = !test_state;
+
+        // Try both normal and inverted logic (some LEDs are active-low)
+        int pin_value = test_state;  // Normal: 1 = on, 0 = off
+        sendf("Pin %d, state=%d (value=%d)", test_pins[current_test], test_state, pin_value);
+
+        gpio_out_write(gpio_out_setup(test_pins[current_test], pin_value), pin_value);
+
+        last_toggle_time = now;
+    }
+
+    // Schedule next callback
+    timer->waketime = now + 100000;  // 100ms
+    return SF_RESCHEDULE;
+}
+
+// Initialize the test firmware
+void test_init(void) {
+    // Print startup message immediately
+    sendf("CLEO Test Firmware Started! Initializing...");
+
+    // Setup LED pin as output
+    gpio_out_write(gpio_out_setup(LED_PIN, 0), 0);
+    sendf("LED pin %d configured as output", LED_PIN);
+
+    // Test LED immediately
+    gpio_out_write(gpio_out_setup(LED_PIN, 1), 1);
+    sendf("LED turned ON");
+
+    // Wait a bit
+    volatile int i;
+    for(i = 0; i < 1000000; i++);
+
+    // Turn LED off
+    gpio_out_write(gpio_out_setup(LED_PIN, 0), 0);
+    sendf("LED turned OFF");
+
+    // Setup timer for blinking
+    static struct timer blink_timer;
+    blink_timer.func = blink_callback;
+    blink_timer.waketime = timer_read_time() + 100000;
+    sched_add_timer(&blink_timer);
+
+    sendf("Timer initialized, LED should start blinking now!");
+}
+
+// Test command
+void command_test_firmware(uint32_t *args) {
+    sendf("Test firmware command received! System is working.");
+}
+DECL_COMMAND(command_test_firmware, "test_firmware");
 
 // Stepper Motor Structure (our own implementation)
 struct custom_stepper {
