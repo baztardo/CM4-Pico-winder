@@ -40,14 +40,22 @@ echo ""
 if [ $? -eq 0 ]; then
     echo "✅ Build successful!"
     echo "Output files:"
-    ls -la out/klipper.elf out/klipper.uf2 2>/dev/null || echo "No output files found"
+    if [[ "$MCU_TYPE" == *"stm32"* ]]; then
+        ls -la out/klipper.bin 2>/dev/null || echo "No STM32 bin file found"
+    elif [[ "$MCU_TYPE" == "rp2350" ]]; then
+        ls -la out/klipper.uf2 2>/dev/null || echo "No UF2 file found"
+    else
+        ls -la out/klipper.elf out/klipper.uf2 2>/dev/null || echo "No output files found"
+    fi
     echo ""
     echo "🎯 Flash commands:"
     if [[ "$MCU_TYPE" == "rp2350" ]]; then
         echo "   Put Pico in BOOTSEL mode, then:"
         echo "   cp out/klipper.uf2 /Volumes/RPI-RP2/"
+    elif [[ "$MCU_TYPE" == *"stm32"* ]]; then
+        echo "   STM32 boards (mass storage): cp out/klipper.bin /media/BOARD/firmware.bin"
+        echo "   STM32 boards (DFU mode): dfu-util -d 0483:df11 -a 0 -s 0x08000000 -D out/klipper.bin"
     else
-        echo "   STM32 boards: Use dfu-util or your board's flash tool"
         echo "   Check docs for your specific board flashing instructions"
     fi
 else

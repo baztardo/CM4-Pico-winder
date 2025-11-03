@@ -1,5 +1,5 @@
-// MINIMAL TEST FIRMWARE
-// Just blinks LED on PC13 and prints to serial
+// MINIMAL WORKING TEST FIRMWARE FOR STM32F401RE
+// Blinks PC13 LED and prints serial messages
 
 #include "basecmd.h"
 #include "board/gpio.h"
@@ -7,74 +7,31 @@
 #include "board/misc.h"
 #include "command.h"
 #include "sched.h"
+#include "cnc_winder_config.h"
 
-// Test multiple possibilities - GPIO might be active-low or different pins
-#define NUM_TEST_PINS 6
-static const uint8_t test_pins[NUM_TEST_PINS] = {5, 13, 16, 17, 18, 45}; // PA5, PA13, PB0, PB1, PB2, PC13
-static uint8_t current_test = 0;
-static uint8_t test_state = 0;
-static uint32_t last_test_time = 0;
+// Minimal LED blink test for STM32F401RE
+#define STM32_LED_PIN 45  // PC13
 
-// Comprehensive GPIO test
-static uint_fast8_t blink_callback(struct timer *timer) {
-    uint32_t now = timer_read_time();
-
-    // Change test every 3 seconds
-    if (now - last_test_time > 3000000) {  // 3 seconds
-        current_test = (current_test + 1) % NUM_TEST_PINS;
-        test_state = 0;
-        sendf("=== Starting test %d: GPIO pin %d ===", current_test, test_pins[current_test]);
-        last_test_time = now;
-    }
-
-    // Within each test, toggle every 500ms
-    static uint32_t last_toggle_time = 0;
-    if (now - last_toggle_time > 500000) {  // 500ms
-        test_state = !test_state;
-
-        // Try both normal and inverted logic (some LEDs are active-low)
-        int pin_value = test_state;  // Normal: 1 = on, 0 = off
-        sendf("Pin %d, state=%d (value=%d)", test_pins[current_test], test_state, pin_value);
-
-        gpio_out_write(gpio_out_setup(test_pins[current_test], pin_value), pin_value);
-
-        last_toggle_time = now;
-    }
-
-    // Schedule next callback
-    timer->waketime = now + 100000;  // 100ms
+static uint_fast8_t blink_event(struct timer *timer) {
+    static uint8_t state = 0;
+    state = !state;
+    
+    struct gpio_out led = gpio_out_setup(STM32_LED_PIN, state);
+    gpio_out_write(led, state);
+    
+    timer->waketime = timer_read_time() + timer_from_us(500000); // 500ms
     return SF_RESCHEDULE;
 }
 
-// Initialize the test firmware
-void test_init(void) {
-    // Print startup message immediately
-    sendf("CLEO Test Firmware Started! Initializing...");
-
-    // Setup LED pin as output
-    gpio_out_write(gpio_out_setup(LED_PIN, 0), 0);
-    sendf("LED pin %d configured as output", LED_PIN);
-
-    // Test LED immediately
-    gpio_out_write(gpio_out_setup(LED_PIN, 1), 1);
-    sendf("LED turned ON");
-
-    // Wait a bit
-    volatile int i;
-    for(i = 0; i < 1000000; i++);
-
-    // Turn LED off
-    gpio_out_write(gpio_out_setup(LED_PIN, 0), 0);
-    sendf("LED turned OFF");
-
-    // Setup timer for blinking
+void minimal_test_init(void) {
+    sendf("STM32F401RE Init - PC13 LED Test");
+    
     static struct timer blink_timer;
-    blink_timer.func = blink_callback;
-    blink_timer.waketime = timer_read_time() + 100000;
+    blink_timer.func = blink_event;
+    blink_timer.waketime = timer_read_time() + timer_from_us(1000000);
     sched_add_timer(&blink_timer);
-
-    sendf("Timer initialized, LED should start blinking now!");
 }
+DECL_INIT(minimal_test_init);
 
 // Test command
 void command_test_firmware(uint32_t *args) {
