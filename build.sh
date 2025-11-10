@@ -1,63 +1,115 @@
 #!/bin/bash
-# Build script for CM4-Pico-winder multi-platform CNC winder
 
-# Set up PATH for ARM GCC toolchain and binutils
-export PATH="/opt/homebrew/opt/binutils/bin:/Users/ssnow/Documents/GitHub/CM4-Pico-winder/tools/arm-gnu-toolchain-14.3.rel1-darwin-arm64-arm-none-eabi/bin:$PATH"
+# Build script for CM4-Pico-winder (STM32 + RP2040 CNC winder firmware)
 
-# MCU switching support
-if [ "$1" = "simulator" ]; then
-    echo "🔄 Switching to Simulator (software testing)..."
-    cp .config.simulator .config 2>/dev/null || echo "❌ .config.simulator not found"
-    shift
-elif [ "$1" = "rp2350" ]; then
-    echo "🔄 Switching to RP2350 (Raspberry Pi Pico)..."
-    cp .config.rp2350 .config 2>/dev/null || echo "❌ .config.rp2350 not found"
-    shift
-elif [ "$1" = "stm32f401" ]; then
-    echo "🔄 Switching to STM32F401RE (CLEO)..."
-    cp .config.stm32f401 .config 2>/dev/null || echo "❌ .config.stm32f401 not found"
-    shift
-elif [ "$1" = "stm32g0" ]; then
-    echo "🔄 Switching to STM32G0B0 (BTT Manta MP4)..."
-    cp .config.stm32g0 .config 2>/dev/null || echo "❌ .config.stm32g0 not found"
-    shift
+set -e
+
+echo "=== CM4-Pico-winder Build Script ==="
+echo
+
+# Check if we're in the right directory
+if [ ! -f "Makefile" ]; then
+    echo "ERROR: Makefile not found. Run this script from the project root."
+    exit 1
 fi
 
-MCU_TYPE=$(grep 'CONFIG_MCU=' .config | cut -d'"' -f2)
-echo "Building CM4-Pico-winder for $MCU_TYPE..."
-echo "PATH includes: $(which arm-none-eabi-gcc)"
-echo "Binutils: $(which readelf)"
-echo ""
-
-# Run make with parallel jobs (quiet mode)
-if [ "$1" = "verbose" ]; then
-    make -j4 "$@"
-else
-    make -j4 "$@" 2>&1 | grep -E "(error|Error|ERROR|warning|Warning|WARNING|✅|❌|Compiling|Linking|Building)" || echo "Build completed with no significant output"
-fi
-
-echo ""
-if [ $? -eq 0 ]; then
-    echo "✅ Build successful!"
-    echo "Output files:"
-    if [[ "$MCU_TYPE" == *"stm32"* ]]; then
-        ls -la out/klipper.bin 2>/dev/null || echo "No STM32 bin file found"
-    elif [[ "$MCU_TYPE" == "rp2350" ]]; then
-        ls -la out/klipper.uf2 2>/dev/null || echo "No UF2 file found"
-    else
-        ls -la out/klipper.elf out/klipper.uf2 2>/dev/null || echo "No output files found"
-    fi
-    echo ""
-    echo "🎯 Flash commands:"
-    if [[ "$MCU_TYPE" == "rp2350" ]]; then
-        echo "   Put Pico in BOOTSEL mode, then:"
-        echo "   cp out/klipper.uf2 /Volumes/RPI-RP2/"
-    elif [[ "$MCU_TYPE" == *"stm32"* ]]; then
-        echo "   STM32 boards (mass storage): cp out/klipper.bin /media/BOARD/firmware.bin"
-        echo "   STM32 boards (DFU mode): dfu-util -d 0483:df11 -a 0 -s 0x08000000 -D out/klipper.bin"
-    else
-        echo "   Check docs for your specific board flashing instructions"
+# Detect MCU from .config
+if [ -f ".config" ]; then
+    MCU=$(grep "^CONFIG_MCU=" .config | cut -d'=' -f2 | tr -d '"')
+    if [ -z "$MCU" ]; then
+        MCU="unknown"
     fi
 else
-    echo "❌ Build failed!"
+    MCU="unknown"
 fi
+
+echo "MCU detected: $MCU"
+echo
+
+# Function to build for specific MCU
+build_mcu() {
+    local mcu=$1
+    local config_file=$2
+
+    echo "=== Building for $mcu ==="
+
+    if [ -f "$config_file" ]; then
+        echo "Using config file: $config_file"
+        cp "$config_file" .config
+    fi
+
+    # Configure if needed
+    if [ ! -f ".config" ] || ! grep -q "CONFIG_MACH_" .config; then
+        echo "Running make menuconfig..."
+        make menuconfig
+    fi
+
+    # Build
+    echo "Building firmware..."
+    make clean
+    make -j$(nproc)
+
+    # Check output
+    if [ "$mcu" = "stm32" ]; then
+        if [ -f "out/klipper.bin" ]; then
+            echo "✅ SUCCESS: STM32 firmware built - out/klipper.bin"
+            ls -la out/klipper.bin
+        else
+            echo "❌ ERROR: STM32 build failed - no klipper.bin found"
+            exit 1
+        fi
+    elif [ "$mcu" = "rp2040" ]; then
+        if [ -f "out/klipper.uf2" ]; then
+            echo "✅ SUCCESS: RP2040 firmware built - out/klipper.uf2"
+            ls -la out/klipper.uf2
+        else
+            echo "❌ ERROR: RP2040 build failed - no klipper.uf2 found"
+            exit 1
+        fi
+    fi
+
+    echo
+}
+
+# Build options
+case "$1" in
+    "stm32")
+        build_mcu "stm32" ".config.stm32"
+        ;;
+    "rp2040")
+        build_mcu "rp2040" ".config.rp2040"
+        ;;
+    "all")
+        echo "Building all MCUs..."
+        build_mcu "stm32" ".config.stm32"
+        build_mcu "rp2040" ".config.rp2040"
+        ;;
+    "clean")
+        echo "Cleaning build..."
+        make clean
+        rm -f .config .config.stm32 .config.rp2040
+        ;;
+    *)
+        echo "Usage: $0 {stm32|rp2040|all|clean}"
+        echo
+        echo "Examples:"
+        echo "  ./build.sh stm32     - Build STM32 firmware"
+        echo "  ./build.sh rp2040    - Build RP2040 firmware"
+        echo "  ./build.sh all       - Build both"
+        echo "  ./build.sh clean     - Clean build files"
+        echo
+        echo "Current MCU: $MCU"
+        echo
+        if [ "$MCU" = "stm32" ]; then
+            echo "STM32 Flashing Instructions:"
+            echo "1. Connect CLEO board via USB"
+            echo "2. Drag out/klipper.bin to the NOD_F401DE drive"
+            echo "3. Board will auto-reboot with new firmware"
+        elif [ "$MCU" = "rp2040" ]; then
+            echo "RP2040 Flashing Instructions:"
+            echo "1. Put Pico in bootloader mode (hold BOOTSEL while plugging in)"
+            echo "2. Drag out/klipper.uf2 to the RPI-RP2 drive"
+        fi
+        exit 1
+        ;;
+esac

@@ -6,6 +6,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import sys, os, subprocess, optparse, logging, shlex, socket, time, traceback
 import json, zlib
+sys.path.append('./klippy')
 import msgproto
 
 FILEHEADER = """

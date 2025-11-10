@@ -1,29 +1,38 @@
 # Main code build rules
 
-# MCU directories
-dirs-$(CONFIG_MACH_STM32) += src/stm32
+src-y += sched.c command.c basecmd.c debugcmds.c
+src-$(CONFIG_HAVE_GPIO) += initial_pins.c gpiocmds.c stepper.c endstop.c \
+    trsync.c
+src-$(CONFIG_WANT_ADC) += adccmds.c
+src-$(CONFIG_WANT_SPI) += spicmds.c
+src-$(CONFIG_WANT_I2C) += i2ccmds.c
+src-$(CONFIG_WANT_HARD_PWM) += pwmcmds.c
+# SDIO removed - SD card not needed for CNC winder
+# src-$(CONFIG_HAVE_GPIO_SDIO) += sdiocmds.c
 
-# Core system files
-src-y += sched.c command.c basecmd.c
-
-# GPIO and hardware interface
-src-$(CONFIG_HAVE_GPIO) += initial_pins.c gpiocmds.c
-
-# Optional features
+src-$(CONFIG_WANT_BUTTONS) += buttons.c
 src-$(CONFIG_WANT_TMCUART) += tmcuart.c
+# Neopixel removed - LED control not needed for CNC winder
+# src-$(CONFIG_WANT_NEOPIXEL) += neopixel.c
 src-$(CONFIG_WANT_PULSE_COUNTER) += pulse_counter.c
-
-# CNC winder code
-src-y += stepper.c
-
-# Simulator specific files
-src-$(CONFIG_MACH_SIMULATOR) += simulator/main.c simulator/gpio.c
-src-$(CONFIG_MACH_SIMULATOR) += simulator/serial.c simulator/timer.c
-
-# RP2350 specific files (only essential ones)
-src-$(CONFIG_MACH_RP2350) += rp2040/timer_rp2350.c
-
-# Generic ARM Cortex-M files (conditional to avoid conflicts)
-src-$(CONFIG_MACH_RP2040) += generic/timer_irq.c
-
-
+# LCD displays removed - not needed for CNC winder
+# src-$(CONFIG_WANT_ST7920) += lcd_st7920.c
+# src-$(CONFIG_WANT_HD44780) += lcd_hd44780.c
+src-$(CONFIG_WANT_SOFTWARE_SPI) += spi_software.c
+src-$(CONFIG_WANT_SOFTWARE_I2C) += i2c_software.c
+# Thermocouple removed - temperature sensing not needed for CNC winder
+# src-$(CONFIG_WANT_THERMOCOUPLE) += thermocouple.c
+# Sensor files commented out for CNC winder (not needed)
+# src-$(CONFIG_WANT_ADXL345) += sensor_adxl345.c
+# src-$(CONFIG_WANT_LIS2DW) += sensor_lis2dw.c
+# src-$(CONFIG_WANT_MPU9250) += sensor_mpu9250.c
+# src-$(CONFIG_WANT_ICM20948) += sensor_icm20948.c
+# src-$(CONFIG_WANT_HX71X) += sensor_hx71x.c
+# src-$(CONFIG_WANT_ADS1220) += sensor_ads1220.c
+# src-$(CONFIG_WANT_LDC1612) += sensor_ldc1612.c
+# src-$(CONFIG_WANT_SENSOR_ANGLE) += sensor_angle.c
+# src-$(CONFIG_NEED_SENSOR_BULK) += sensor_bulk.c
+# SOS filter removed - input shaping not needed for CNC winder
+# src-$(CONFIG_NEED_SOS_FILTER) += sos_filter.c
+# Load cell probe removed - probing not needed for CNC winder
+# src-$(CONFIG_WANT_LOAD_CELL_PROBE) += load_cell_probe.c

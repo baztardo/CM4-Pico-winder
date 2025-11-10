@@ -109,7 +109,7 @@ reset_handler_stage_two(void)
 
 // Initial code entry point - invoked by the processor after a reset
 // Reset interrupts and stack to take control from bootloaders
-void __attribute__((weak)) __section(".text.armcm_boot.stage_one")
+void __section(".text.armcm_boot.stage_one")
 ResetHandler(void)
 {
     __disable_irq();
@@ -121,7 +121,7 @@ ResetHandler(void)
 DECL_ARMCM_IRQ(ResetHandler, -15);
 
 // Code called for any undefined interrupts
-void __attribute__((weak))
+void
 DefaultHandler(void)
 {
     for (;;)
@@ -134,14 +134,14 @@ DefaultHandler(void)
  ****************************************************************/
 
 // Return the start of memory available for dynamic allocations
-void __attribute__((weak)) *
+void *
 dynmem_start(void)
 {
     return &_bss_end;
 }
 
 // Return the end of memory available for dynamic allocations
-void __attribute__((weak)) *
+void *
 dynmem_end(void)
 {
     return &_stack_start;

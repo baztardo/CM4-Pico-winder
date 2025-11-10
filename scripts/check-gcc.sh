@@ -4,22 +4,8 @@
 f1="$1"
 f2="$2"
 
-# Try to find readelf in common locations
-READELF=""
-for path in "/opt/homebrew/opt/binutils/bin/readelf" "/usr/bin/readelf" "/usr/local/bin/readelf" "readelf"; do
-    if command -v "$path" >/dev/null 2>&1; then
-        READELF="$path"
-        break
-    fi
-done
-
-if [ -z "$READELF" ]; then
-    echo "Warning: readelf not found, skipping compiler check"
-    exit 0
-fi
-
-s1=`"$READELF" -A "$f1" | grep "Tag_ARM_ISA_use"`
-s2=`"$READELF" -A "$f2" | grep "Tag_ARM_ISA_use"`
+s1=`readelf -A "$f1" | grep "Tag_ARM_ISA_use"`
+s2=`readelf -A "$f2" | grep "Tag_ARM_ISA_use"`
 
 if [ "$s1" != "$s2" ]; then
     echo ""

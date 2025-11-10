@@ -1,9 +1,5 @@
-# CM4-Pico-winder RP2350 Motor Controller Build System
+# Klipper build system
 #
-# ⚠️  WARNING: Do not run 'make' directly! Use './build.sh' instead.
-#    The build scripts set up the correct PATH for ARM GCC toolchain.
-#
-# Based on Klipper build system
 # Copyright (C) 2016-2020  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -22,7 +18,7 @@ LD=$(CROSS_PREFIX)ld
 OBJCOPY=$(CROSS_PREFIX)objcopy
 OBJDUMP=$(CROSS_PREFIX)objdump
 STRIP=$(CROSS_PREFIX)strip
-CPP=$(CC) -E
+CPP=cpp
 PYTHON=python3
 
 # Source files
@@ -37,7 +33,7 @@ CFLAGS := -iquote $(OUT) -iquote src -iquote $(OUT)board-generic/ \
 		-std=gnu11 -O2 -MD -Wall \
 		-Wold-style-definition $(call cc-option,$(CC),-Wtype-limits,) \
     -ffunction-sections -fdata-sections -fno-delete-null-pointer-checks
-CFLAGS += -ggdb3
+CFLAGS += -flto=auto -fwhole-program -fno-use-linker-plugin -ggdb3
 
 OBJS_klipper.elf = $(patsubst %.c, $(OUT)src/%.o,$(src-y))
 OBJS_klipper.elf += $(OUT)compile_time_request.o
@@ -70,7 +66,7 @@ $(OUT)%.o: %.c $(OUT)autoconf.h
 
 $(OUT)%.ld: %.lds.S $(OUT)autoconf.h
 	@echo "  Preprocessing $@"
-	$(Q)$(CPP) -I$(OUT) -P -MD -MT $@ $< -o $@
+	$(Q)$(CC) -E -I$(OUT) -P -MD -MT $@ $< -o $@
 
 $(OUT)klipper.elf: $(OBJS_klipper.elf)
 	@echo "  Linking $@"
@@ -82,11 +78,10 @@ $(OUT)klipper.elf: $(OBJS_klipper.elf)
 $(OUT)%.o.ctr: $(OUT)%.o
 	$(Q)$(OBJCOPY) -j '.compile_time_request' -O binary $^ $@
 
-$(OUT)compile_time_request.c:
-	@echo "/* Dummy compile time request file */" > $@
-
-$(OUT)compile_time_request.o: $(OUT)compile_time_request.c
+$(OUT)compile_time_request.o: $(patsubst %.c, $(OUT)src/%.o.ctr,$(src-y)) ./scripts/buildcommands.py
 	@echo "  Building $@"
+	$(Q)cat $(patsubst %.c, $(OUT)src/%.o.ctr,$(src-y)) | tr -s '\0' '\n' > $(OUT)compile_time_request.txt
+	$(Q)$(PYTHON) ./scripts/buildcommands.py -d $(OUT)klipper.dict -t "$(CC);$(AS);$(LD);$(OBJCOPY);$(OBJDUMP);$(STRIP)" $(OUT)compile_time_request.txt $(OUT)compile_time_request.c
 	$(Q)$(CC) $(CFLAGS) -c $(OUT)compile_time_request.c -o $@
 
 ################ Auto generation of "board/" include file link

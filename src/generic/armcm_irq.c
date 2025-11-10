@@ -5,7 +5,7 @@
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
 #include "board/internal.h" // __CORTEX_M
-#include "board/irq.h" // irqstatus_t
+#include "irq.h" // irqstatus_t
 #include "sched.h" // DECL_SHUTDOWN
 
 void

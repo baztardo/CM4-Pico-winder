@@ -1,579 +1,419 @@
-// MINIMAL WORKING TEST FIRMWARE FOR STM32F401RE
-// Blinks PC13 LED and prints serial messages
+// Handling of stepper drivers.
+//
+// Copyright (C) 2016-2025  Kevin O'Connor <kevin@koconnor.net>
+//
+// This file may be distributed under the terms of the GNU GPLv3 license.
 
-#include "basecmd.h"
-#include "board/gpio.h"
-#include "board/irq.h"
-#include "board/misc.h"
-#include "command.h"
-#include "sched.h"
-#include "cnc_winder_config.h"
+#include "autoconf.h" // CONFIG_*
+#include "basecmd.h" // oid_alloc
+#include "board/gpio.h" // gpio_out_write
+#include "board/irq.h" // irq_disable
+#include "board/misc.h" // timer_is_before
+#include "command.h" // DECL_COMMAND
+#include "sched.h" // struct timer
+#include "stepper.h" // stepper_event
+#include "trsync.h" // trsync_add_signal
 
-// Minimal LED blink test for STM32F401RE
-#define STM32_LED_PIN 45  // PC13
+DECL_CONSTANT("STEPPER_STEP_BOTH_EDGE", 1);
 
-static uint_fast8_t blink_event(struct timer *timer) {
-    static uint8_t state = 0;
-    state = !state;
-    
-    struct gpio_out led = gpio_out_setup(STM32_LED_PIN, state);
-    gpio_out_write(led, state);
-    
-    timer->waketime = timer_read_time() + timer_from_us(500000); // 500ms
-    return SF_RESCHEDULE;
-}
+#if CONFIG_INLINE_STEPPER_HACK && CONFIG_WANT_STEPPER_OPTIMIZED_BOTH_EDGE
+ #define HAVE_EDGE_OPTIMIZATION 1
+ #define HAVE_AVR_OPTIMIZATION 0
+#elif CONFIG_INLINE_STEPPER_HACK && CONFIG_MACH_AVR
+ #define HAVE_EDGE_OPTIMIZATION 0
+ #define HAVE_AVR_OPTIMIZATION 1
+#else
+ #define HAVE_EDGE_OPTIMIZATION 0
+ #define HAVE_AVR_OPTIMIZATION 0
+#endif
 
-void minimal_test_init(void) {
-    sendf("STM32F401RE Init - PC13 LED Test");
-    
-    static struct timer blink_timer;
-    blink_timer.func = blink_event;
-    blink_timer.waketime = timer_read_time() + timer_from_us(1000000);
-    sched_add_timer(&blink_timer);
-}
-DECL_INIT(minimal_test_init);
-
-// Test command
-void command_test_firmware(uint32_t *args) {
-    sendf("Test firmware command received! System is working.");
-}
-DECL_COMMAND(command_test_firmware, "test_firmware");
-
-// Stepper Motor Structure (our own implementation)
-struct custom_stepper {
-    struct timer timer;
-    struct gpio_out step_pin;
-    struct gpio_out dir_pin;
-    struct gpio_out enable_pin;
-
-    uint32_t interval;          // Microseconds between steps
-    uint32_t steps_remaining;   // Steps left to execute
-    uint8_t direction;          // 0=forward, 1=reverse
-    uint8_t is_active;
-    uint32_t position;          // Current position in steps
+struct stepper_move {
+    struct move_node node;
+    uint32_t interval;
+    int16_t add;
+    uint16_t count;
+    uint8_t flags;
 };
 
-// CNC Winder Configuration Structure
-struct cnc_winder_config {
-    // Stepper motor instances (direct control, no OIDs)
-    struct custom_stepper traverse_stepper;  // Side-to-side wire laying
-    // Pickup stepper removed - not used in this design
+enum { MF_DIR=1<<0 };
 
-    // BLDC Spindle Configuration (ZS-X11H Driver)
-    struct gpio_pwm spindle_pwm;        // PWM speed control
-    struct gpio_out spindle_brake;      // Brake control
-    struct gpio_out spindle_dir;        // Direction control
-    struct gpio_in hall_sensor;         // Single Hall sensor feedback
-
-    // System parameters
-    uint32_t bobbin_diameter_um;    // 12mm = 12000 um
-    uint32_t wire_diameter_um;      // 43 AWG ≈ 56 um
-    float spindle_gear_ratio;       // Gear ratio (usually 1.0 for direct drive)
-
-    // Safety
-    struct gpio_in emergency_stop_pin;
-    struct gpio_in endstop_pin;
+struct stepper {
+    struct timer time;
+    uint32_t interval;
+    int16_t add;
+    uint32_t count;
+    uint32_t next_step_time, step_pulse_ticks;
+    struct gpio_out step_pin, dir_pin;
+    uint32_t position;
+    struct move_queue_head mq;
+    struct trsync_signal stop_signal;
+    // gcc (pre v6) does better optimization when uint8_t are bitfields
+    uint8_t flags : 8;
 };
 
-// Global CNC winder state
-static struct cnc_winder_config winder = {0};
-static struct timer hall_sensor_timer;
+enum { POSITION_BIAS=0x40000000 };
 
-// BLDC spindle control functions (ZS-X11H driver)
-// Using Klipper's proper PWM implementation for RP2040
+enum {
+    SF_LAST_DIR=1<<0, SF_NEXT_DIR=1<<1, SF_INVERT_STEP=1<<2, SF_NEED_RESET=1<<3,
+    SF_SINGLE_SCHED=1<<4, SF_OPTIMIZED_PATH=1<<5, SF_HAVE_ADD=1<<6
+};
 
-// Initialize PWM for spindle control
-static void spindle_pwm_init(void) {
-    // Configure PWM pin using Klipper's gpio_pwm_setup
-    // cycle_time = CONFIG_CLOCK_FREQ / frequency / MAX_PWM
-    // For 10kHz PWM: cycle_time = 16000000 / 10000 / 255 ≈ 62.75
-    winder.spindle_pwm = gpio_pwm_setup(SPINDLE_PWM_PIN, 63, 0); // ~10kHz PWM, 0% duty
-
-    // Initialize direction and brake pins - STORE the return values!
-    winder.spindle_dir = gpio_out_setup(SPINDLE_DIR_PIN, BLDC_DIRECTION_CW); // Default CW
-    winder.spindle_brake = gpio_out_setup(SPINDLE_BRAKE_PIN, 0); // Brake OFF
-}
-
-// Set PWM duty cycle (0-100%)
-static void spindle_set_pwm_duty(float duty_percent) {
-    // Clamp duty cycle to 0-100%
-    if (duty_percent < 0.0f) duty_percent = 0.0f;
-    if (duty_percent > 100.0f) duty_percent = 100.0f;
-
-    // Convert to PWM level (0-255 range for Klipper)
-    uint32_t pwm_level = (uint32_t)(duty_percent * 255.0f / 100.0f);
-    gpio_pwm_write(winder.spindle_pwm, pwm_level);
-}
-
-
-static void spindle_set_direction(uint8_t clockwise) {
-    gpio_out_write(winder.spindle_dir, clockwise ? BLDC_DIRECTION_CW : BLDC_DIRECTION_CCW);
-}
-
-static void spindle_brake(uint8_t brake_on) {
-    gpio_out_write(winder.spindle_brake, brake_on ? 1 : 0);
-}
-
-static void spindle_stop(void) {
-    spindle_set_pwm_duty(0.0f);
-    spindle_brake(1); // Apply brake
-}
-
-// Stepper motor timer callback
+// Setup a stepper for the next move in its queue
 static uint_fast8_t
-stepper_timer_callback(struct timer *timer)
+stepper_load_next(struct stepper *s)
 {
-    struct custom_stepper *s = container_of(timer, struct custom_stepper, timer);
-
-    if (SIMULATION_MODE) {
-        // Simulation: Just update position without GPIO
-        if (s->direction == 0) {
-            s->position++;
-#if SIMULATION_MODE
-            sim_position++;
-#endif
-        } else {
-            s->position--;
-#if SIMULATION_MODE
-            sim_position--;
-#endif
-        }
-    } else {
-        // Real hardware: Generate step pulse
-        gpio_out_toggle_noirq(s->step_pin);
-
-        // Update position
-        if (s->direction == 0) {
-            s->position++;
-        } else {
-            s->position--;
-        }
-    }
-
-    // Check if move complete
-    if (s->steps_remaining == 0) {
-        s->is_active = 0;
+    if (move_queue_empty(&s->mq)) {
+        // There is no next move - the queue is empty
+        s->count = 0;
         return SF_DONE;
     }
 
-    // Decrement step counter
-    s->steps_remaining--;
+    // Read next 'struct stepper_move'
+    struct move_node *mn = move_queue_pop(&s->mq);
+    struct stepper_move *m = container_of(mn, struct stepper_move, node);
+    uint32_t move_interval = m->interval;
+    uint_fast16_t move_count = m->count;
+    int_fast16_t move_add = m->add;
+    uint_fast8_t need_dir_change = m->flags & MF_DIR;
+    move_free(m);
 
-    // Schedule next timer event
-    s->timer.waketime += s->interval;
+    // Add all steps to s->position (stepper_get_position() can calc mid-move)
+    s->position = (need_dir_change ? -s->position : s->position) + move_count;
+
+    // Load next move into 'struct stepper'
+    s->add = move_add;
+    s->interval = move_interval + move_add;
+    if (HAVE_EDGE_OPTIMIZATION && s->flags & SF_OPTIMIZED_PATH) {
+        // Using optimized stepper_event_edge()
+        s->time.waketime += move_interval;
+        s->count = move_count;
+    } else if (HAVE_AVR_OPTIMIZATION && s->flags & SF_OPTIMIZED_PATH) {
+        // Using optimized stepper_event_avr()
+        s->time.waketime += move_interval;
+        s->count = move_count;
+        s->flags = move_add ? s->flags | SF_HAVE_ADD : s->flags & ~SF_HAVE_ADD;
+    } else {
+        // Using fully scheduled stepper_event_full() code (the scheduler
+        // may be called twice for each step)
+        uint_fast8_t was_active = !!s->count;
+        uint32_t min_next_time = s->time.waketime;
+        s->next_step_time += move_interval;
+        s->time.waketime = s->next_step_time;
+        s->count = (s->flags & SF_SINGLE_SCHED ? move_count
+                    : (uint32_t)move_count * 2);
+        if (was_active && timer_is_before(s->next_step_time, min_next_time)) {
+            // Actively stepping and next step event close to the last unstep
+            int32_t diff = s->next_step_time - min_next_time;
+            if (diff < (int32_t)-timer_from_us(1000))
+                shutdown("Stepper too far in past");
+            s->time.waketime = min_next_time;
+        }
+        if (was_active && need_dir_change) {
+            // Must ensure minimum time between step change and dir change
+            if (s->flags & SF_SINGLE_SCHED)
+                while (timer_is_before(timer_read_time(), min_next_time))
+                    ;
+            gpio_out_toggle_noirq(s->dir_pin);
+            uint32_t curtime = timer_read_time();
+            min_next_time = curtime + s->step_pulse_ticks;
+            if (timer_is_before(s->time.waketime, min_next_time))
+                s->time.waketime = min_next_time;
+            return SF_RESCHEDULE;
+        }
+    }
+
+    // Set new direction (if needed)
+    if (need_dir_change)
+        gpio_out_toggle_noirq(s->dir_pin);
     return SF_RESCHEDULE;
 }
 
-// Initialize stepper motor
-static void
-stepper_init(struct custom_stepper *s,
-             struct gpio_out step_pin, struct gpio_out dir_pin, struct gpio_out enable_pin)
-{
-    s->step_pin = step_pin;
-    s->dir_pin = dir_pin;
-    s->enable_pin = enable_pin;
-
-    s->timer.func = stepper_timer_callback;
-    s->is_active = 0;
-    s->position = 0;
-    s->steps_remaining = 0;
-    s->interval = STEPPER_DEFAULT_INTERVAL; // From config
-    s->direction = 0;
-}
-
-// Start stepper movement
-static void
-stepper_move(struct custom_stepper *s, uint32_t steps, uint8_t direction, uint32_t interval_us)
-{
-    if (s->is_active) {
-        // Already moving - reject command
-        return;
-    }
-
-    irq_disable();
-
-    // Set direction
-    s->direction = direction;
-    gpio_out_write(s->dir_pin, direction);
-
-    // Setup move parameters
-    s->steps_remaining = steps;
-    s->interval = timer_from_us(interval_us);
-    s->is_active = 1;
-
-    // Start timer
-    s->timer.waketime = timer_read_time() + s->interval;
-    sched_add_timer(&s->timer);
-
-    irq_enable();
-}
-
-// Stop stepper movement
-static void
-stepper_stop(struct custom_stepper *s)
-{
-    irq_disable();
-    sched_del_timer(&s->timer);
-    s->steps_remaining = 0;
-    s->is_active = 0;
-    irq_enable();
-}
-
-// Forward declarations
-static void update_traverse_position(void);
-static void move_traverse_to_position(uint32_t position_um);
-
-// Enable/disable stepper
-static void
-stepper_enable(struct custom_stepper *s, uint8_t enable)
-{
-    irq_disable();
-    gpio_out_write(s->enable_pin, !enable);  // Active LOW
-    irq_enable();
-}
-
-// BLDC spindle state (always real hardware since spindle works)
-static uint32_t spindle_rpm_target = 0;
-static uint32_t spindle_rpm_measured = 0;
-static int32_t last_rpm_error = 0;
-
-// Hall sensor pulse timing history for RPM calculation
-#define HALL_HISTORY_SIZE 20
-static uint32_t hall_pulse_times[HALL_HISTORY_SIZE];
-static int hall_pulse_index = 0;
-
-// Winding state
-static uint32_t target_turns = 0;
-static uint32_t current_turns = 0;
-static uint8_t winding_active = 0;
-static uint32_t current_layer = 0;
-
-// Simulation state (for steppers when hardware is broken)
-#if SIMULATION_MODE
-static uint32_t sim_position = 0;
+// Edge optimization only enabled when fastest rate notably slower than 100ns
+#define EDGE_STEP_TICKS DIV_ROUND_UP(CONFIG_CLOCK_FREQ, 8000000)
+#if HAVE_EDGE_OPTIMIZATION
+ DECL_CONSTANT("STEPPER_OPTIMIZED_EDGE", EDGE_STEP_TICKS);
 #endif
 
-// Set spindle speed in RPM (using calibrated curve from working code)
-static void spindle_set_speed(float rpm) {
-    if (rpm < 0) rpm = 0;
-    if (rpm > MAX_RPM) rpm = MAX_RPM;
-
-    // Always use real hardware for spindle (it works!)
-    spindle_rpm_target = (uint32_t)rpm;
-
-    if (rpm > 0) {
-        // Calibrated scaling based on tachometer: S1000 → 1960 RPM actual
-        // Linear interpolation between min and max
-        float min_duty = PWM_DUTY_MIN;  // Minimum duty to start motor
-        float max_duty = PWM_DUTY_MAX;  // Maximum duty
-
-        // Scale RPM to duty cycle
-        float duty_percent = min_duty + (rpm / MAX_RPM) * (max_duty - min_duty);
-        spindle_set_pwm_duty(duty_percent);
-    } else {
-        // Stop PWM
-        spindle_set_pwm_duty(0.0f);
+// Optimized step function to step on each step pin edge
+static uint_fast8_t
+stepper_event_edge(struct timer *t)
+{
+    struct stepper *s = container_of(t, struct stepper, time);
+    gpio_out_toggle_noirq(s->step_pin);
+    uint32_t count = s->count - 1;
+    if (likely(count)) {
+        s->count = count;
+        s->time.waketime += s->interval;
+        s->interval += s->add;
+        return SF_RESCHEDULE;
     }
+    return stepper_load_next(s);
 }
 
-// Hall sensor monitoring for RPM calculation (ZS-X11H driver)
-// Based on working implementation with proper filtering and RPM calculation
+#define AVR_STEP_TICKS 40 // minimum instructions between step gpio pulses
+#if HAVE_AVR_OPTIMIZATION
+ DECL_CONSTANT("STEPPER_OPTIMIZED_UNSTEP", AVR_STEP_TICKS);
+#endif
+
+// AVR optimized step function
 static uint_fast8_t
-hall_sensor_event(struct timer *timer)
+stepper_event_avr(struct timer *t)
 {
-    // Always use real hardware for spindle RPM sensing (Hall sensor works!)
-    // Real hardware: Read single Hall sensor for RPM feedback
-    uint8_t hall_state = gpio_in_read(winder.hall_sensor);
-
-    // Track Hall sensor transitions for RPM calculation
-    static uint8_t last_hall_state = 0;
-    static uint32_t last_transition_time = 0;
-    static uint32_t transition_count = 0;
-
-    if (hall_state != last_hall_state) {
-        last_hall_state = hall_state;
-        transition_count++;
-
-        uint32_t now = timer_read_time();
-        if (last_transition_time != 0) {
-            uint32_t dt = now - last_transition_time;
-
-            // Filter: Ignore pulses faster than minimum time to prevent noise
-            if (dt > 100) {  // Minimum 100us between pulses
-                // Store pulse timing for averaging
-                hall_pulse_times[hall_pulse_index] = dt;
-                hall_pulse_index = (hall_pulse_index + 1) % HALL_HISTORY_SIZE;
-
-                // Calculate RPM using moving average (from working code)
-                uint32_t sum = 0;
-                int count = (transition_count < HALL_HISTORY_SIZE) ? transition_count : HALL_HISTORY_SIZE;
-
-                for (int i = 0; i < count; i++) {
-                    sum += hall_pulse_times[i];
-                }
-
-                if (sum > 0) {
-                    uint32_t avg_period = sum / count;
-                    float pulses_per_second = 1000000.0f / avg_period;
-                    spindle_rpm_measured = (pulses_per_second * 60.0f) / BLDC_DEFAULT_PPR;
-
-                    // Apply simple exponential smoothing
-                    static float filtered_rpm = 0.0f;
-                    const float ALPHA = 0.3f;
-                    if (filtered_rpm == 0.0f) {
-                        filtered_rpm = spindle_rpm_measured;
-                    } else {
-                        filtered_rpm = (ALPHA * spindle_rpm_measured) + ((1.0f - ALPHA) * filtered_rpm);
-                    }
-                    spindle_rpm_measured = filtered_rpm;
-                }
-            }
-        }
-        last_transition_time = now;
-
-        // Count revolutions for turn tracking (BLDC_DEFAULT_PPR pulses per revolution)
-        static uint32_t revolution_transitions = 0;
-        revolution_transitions++;
-        if (revolution_transitions >= BLDC_DEFAULT_PPR) {
-            revolution_transitions = 0;
-            if (winding_active) {
-                current_turns++;
-            }
-        }
+    struct stepper *s = container_of(t, struct stepper, time);
+    gpio_out_toggle_noirq(s->step_pin);
+    uint16_t *pcount = (void*)&s->count, count = *pcount - 1;
+    if (likely(count)) {
+        *pcount = count;
+        s->time.waketime += s->interval;
+        gpio_out_toggle_noirq(s->step_pin);
+        if (s->flags & SF_HAVE_ADD)
+            s->interval += s->add;
+        return SF_RESCHEDULE;
     }
+    uint_fast8_t ret = stepper_load_next(s);
+    gpio_out_toggle_noirq(s->step_pin);
+    return ret;
+}
 
-    // Reschedule timer
-    hall_sensor_timer.waketime = timer_read_time() + HALL_SENSOR_POLL_US;
-    sched_add_timer(&hall_sensor_timer);
+// Regular "fully scheduled" step function
+static uint_fast8_t
+stepper_event_full(struct timer *t)
+{
+    struct stepper *s = container_of(t, struct stepper, time);
+    gpio_out_toggle_noirq(s->step_pin);
+    uint32_t curtime = timer_read_time();
+    uint32_t min_next_time = curtime + s->step_pulse_ticks;
+    uint32_t count = s->count - 1;
+    if (likely(count & 1 && !(s->flags & SF_SINGLE_SCHED)))
+        // Schedule unstep event
+        goto reschedule_min;
+    if (likely(count)) {
+        s->next_step_time += s->interval;
+        s->interval += s->add;
+        if (unlikely(timer_is_before(s->next_step_time, min_next_time)))
+            // The next step event is too close - push it back
+            goto reschedule_min;
+        s->count = count;
+        s->time.waketime = s->next_step_time;
+        return SF_RESCHEDULE;
+    }
+    s->time.waketime = min_next_time;
+    return stepper_load_next(s);
+reschedule_min:
+    s->count = count;
+    s->time.waketime = min_next_time;
     return SF_RESCHEDULE;
 }
 
-// Configure CNC pickup winder system (uses internal config)
-void
-command_config_cnc_winder(uint32_t *args)
+// Optimized entry point for step function (may be inlined into sched.c code)
+uint_fast8_t
+stepper_event(struct timer *t)
 {
-    // Initialize traverse stepper motor
-    struct gpio_out traverse_step = gpio_out_setup(TRAVERSE_STEP_PIN, 0);
-    struct gpio_out traverse_dir = gpio_out_setup(TRAVERSE_DIR_PIN, 0);
-    struct gpio_out traverse_en = gpio_out_setup(TRAVERSE_ENABLE_PIN, 1); // Active LOW
-
-    stepper_init(&winder.traverse_stepper, traverse_step, traverse_dir, traverse_en);
-
-    // Pickup stepper removed - not used in this design
-
-    // Initialize BLDC spindle PWM control (ZS-X11H driver)
-    spindle_pwm_init();
-
-    // Hall sensor from config (single sensor for RPM feedback)
-    winder.hall_sensor = gpio_in_setup(SPINDLE_HALL_A_PIN, 0);
-
-    // System parameters from config
-    winder.bobbin_diameter_um = BOBBIN_DIAMETER_UM;
-    winder.wire_diameter_um = WIRE_DIAMETER_UM;
-    winder.spindle_gear_ratio = GEAR_RATIO;
-
-    // Safety pins from config
-    winder.emergency_stop_pin = gpio_in_setup(EMERGENCY_STOP_PIN, 0);
-    // winder.endstop_pin = gpio_in_setup(ENDSTOP_PIN, 0); // Endstop removed
-
-    // Initialize Hall sensor monitoring
-    hall_sensor_timer.func = hall_sensor_event;
-    hall_sensor_timer.waketime = timer_read_time() + timer_from_us(HALL_SENSOR_POLL_US);
-    sched_add_timer(&hall_sensor_timer);
-
-    sendf("cnc_winder_configured traverse_pins=%d,%d,%d spindle_pins=%d,%d,%d hall_pin=%d safety_pins=%d",
-          TRAVERSE_STEP_PIN, TRAVERSE_DIR_PIN, TRAVERSE_ENABLE_PIN,
-          SPINDLE_PWM_PIN, SPINDLE_BRAKE_PIN, SPINDLE_DIR_PIN,
-          SPINDLE_HALL_A_PIN, EMERGENCY_STOP_PIN);
+    if (HAVE_EDGE_OPTIMIZATION)
+        return stepper_event_edge(t);
+    if (HAVE_AVR_OPTIMIZATION)
+        return stepper_event_avr(t);
+    return stepper_event_full(t);
 }
-DECL_COMMAND(command_config_cnc_winder, "config_cnc_winder");
 
-// Start winding operation
 void
-command_start_winding(uint32_t *args)
+command_config_stepper(uint32_t *args)
 {
-    uint32_t requested_turns = args[0];
-    uint32_t requested_rpm = args[1];
-
-    // Validate parameters using config limits
-    if (requested_turns < MIN_WINDING_TURNS || requested_turns > MAX_WINDING_TURNS) {
-        sendf("error invalid_turns min=%u max=%u", MIN_WINDING_TURNS, MAX_WINDING_TURNS);
-        return;
+    struct stepper *s = oid_alloc(args[0], command_config_stepper, sizeof(*s));
+    int_fast8_t invert_step = args[3];
+    if (invert_step > 0)
+        s->flags = SF_INVERT_STEP;
+    else if (invert_step < 0)
+        s->flags = SF_SINGLE_SCHED;
+    s->step_pin = gpio_out_setup(args[1], s->flags & SF_INVERT_STEP);
+    s->dir_pin = gpio_out_setup(args[2], 0);
+    s->position = -POSITION_BIAS;
+    s->step_pulse_ticks = args[4];
+    move_queue_setup(&s->mq, sizeof(struct stepper_move));
+    if (HAVE_EDGE_OPTIMIZATION) {
+        if (invert_step < 0 && s->step_pulse_ticks <= EDGE_STEP_TICKS)
+            s->flags |= SF_OPTIMIZED_PATH;
+        else
+            s->time.func = stepper_event_full;
+    } else if (HAVE_AVR_OPTIMIZATION) {
+        if (invert_step >= 0 && s->step_pulse_ticks <= AVR_STEP_TICKS)
+            s->flags |= SF_SINGLE_SCHED | SF_OPTIMIZED_PATH;
+        else
+            s->time.func = stepper_event_full;
+    } else if (!CONFIG_INLINE_STEPPER_HACK) {
+        s->time.func = stepper_event_full;
     }
+}
+DECL_COMMAND(command_config_stepper, "config_stepper oid=%c step_pin=%c"
+             " dir_pin=%c invert_step=%c step_pulse_ticks=%u");
 
-    if (requested_rpm < OPERATIONAL_RPM_MIN || requested_rpm > OPERATIONAL_RPM_MAX) {
-        sendf("error invalid_rpm min=%u max=%u", OPERATIONAL_RPM_MIN, OPERATIONAL_RPM_MAX);
-        return;
+// Return the 'struct stepper' for a given stepper oid
+static struct stepper *
+stepper_oid_lookup(uint8_t oid)
+{
+    return oid_lookup(oid, command_config_stepper);
+}
+
+// Schedule a set of steps with a given timing
+void
+command_queue_step(uint32_t *args)
+{
+    struct stepper *s = stepper_oid_lookup(args[0]);
+    struct stepper_move *m = move_alloc();
+    m->interval = args[1];
+    m->count = args[2];
+    if (!m->count)
+        shutdown("Invalid count parameter");
+    m->add = args[3];
+    m->flags = 0;
+
+    irq_disable();
+    uint8_t flags = s->flags;
+    if (!!(flags & SF_LAST_DIR) != !!(flags & SF_NEXT_DIR)) {
+        flags ^= SF_LAST_DIR;
+        m->flags |= MF_DIR;
     }
-
-    target_turns = requested_turns;
-    spindle_rpm_target = requested_rpm;
-
-    current_turns = 0;
-    current_layer = 0;
-    winding_active = 1;
-
-    // Enable spindle motor (Hall sensor commutation will start automatically)
-    // Initial spindle ramp-up would be handled by PID controller
-
-    sendf("winding_started turns=%u rpm=%u", target_turns, spindle_rpm_target);
-}
-DECL_COMMAND(command_start_winding, "start_winding turns=%u rpm=%u");
-
-// Emergency stop
-void
-command_cnc_emergency_stop(uint32_t *args)
-{
-    winding_active = 0;
-    spindle_rpm_target = 0;
-
-    // Stop spindle motor immediately
-    spindle_stop();
-
-    // Stop traverse stepper
-    stepper_stop(&winder.traverse_stepper);
-
-    sendf("cnc_emergency_stop_activated");
-}
-DECL_COMMAND(command_cnc_emergency_stop, "cnc_emergency_stop");
-
-// Get system status
-void
-command_get_winder_status(uint32_t *args)
-{
-    sendf("winder_status active=%c turns=%u/%u rpm=%u/%u layer=%u",
-          winding_active, current_turns, target_turns,
-          spindle_rpm_measured, spindle_rpm_target, current_layer);
-}
-DECL_COMMAND(command_get_winder_status, "get_winder_status");
-
-// Manual spindle speed control (for testing)
-void
-command_set_spindle_rpm(uint32_t *args)
-{
-    spindle_rpm_target = args[0];
-    sendf("spindle_rpm_set target=%u", spindle_rpm_target);
-}
-DECL_COMMAND(command_set_spindle_rpm, "set_spindle_rpm rpm=%u");
-
-// Core winding algorithm - called periodically to synchronize traverse
-void
-cnc_winder_update(void)
-{
-    if (!winding_active) return;
-
-    // Check emergency stop
-    if (gpio_in_read(winder.emergency_stop_pin)) {
-        command_cnc_emergency_stop(NULL);
-        return;
+    if (s->count) {
+        s->flags = flags;
+        move_queue_push(&m->node, &s->mq);
+    } else if (flags & SF_NEED_RESET) {
+        move_free(m);
+    } else {
+        s->flags = flags;
+        move_queue_push(&m->node, &s->mq);
+        stepper_load_next(s);
+        sched_add_timer(&s->time);
     }
+    irq_enable();
+}
+DECL_COMMAND(command_queue_step,
+             "queue_step oid=%c interval=%u count=%hu add=%hi");
 
-    // Check for winding completion
-    if (current_turns >= target_turns) {
-        winding_active = 0;
-        spindle_rpm_target = 0;
-        sendf("winding_completed turns=%u", current_turns);
-        return;
-    }
+// Set the direction of the next queued step
+void
+command_set_next_step_dir(uint32_t *args)
+{
+    struct stepper *s = stepper_oid_lookup(args[0]);
+    uint8_t nextdir = args[1] ? SF_NEXT_DIR : 0;
+    irq_disable();
+    s->flags = (s->flags & ~SF_NEXT_DIR) | nextdir;
+    irq_enable();
+}
+DECL_COMMAND(command_set_next_step_dir, "set_next_step_dir oid=%c dir=%c");
 
-    // Update traverse position based on current layer
-    update_traverse_position();
+// Set an absolute time that the next step will be relative to
+void
+command_reset_step_clock(uint32_t *args)
+{
+    struct stepper *s = stepper_oid_lookup(args[0]);
+    uint32_t waketime = args[1];
+    irq_disable();
+    if (s->count)
+        shutdown("Can't reset time when stepper active");
+    s->next_step_time = s->time.waketime = waketime;
+    s->flags &= ~SF_NEED_RESET;
+    irq_enable();
+}
+DECL_COMMAND(command_reset_step_clock, "reset_step_clock oid=%c clock=%u");
 
-    // PID control for spindle speed (using config constants)
-    static int32_t rpm_error_integral = 0;
-    int32_t rpm_error = spindle_rpm_target - spindle_rpm_measured;
-
-    rpm_error_integral += rpm_error;
-    if (rpm_error_integral > SPINDLE_PID_MAX_INTEGRAL) rpm_error_integral = SPINDLE_PID_MAX_INTEGRAL;
-    if (rpm_error_integral < -SPINDLE_PID_MAX_INTEGRAL) rpm_error_integral = -SPINDLE_PID_MAX_INTEGRAL;
-
-    // Calculate PID output and adjust spindle speed
-    float pid_output = SPINDLE_PID_KP * rpm_error +
-                      SPINDLE_PID_KI * rpm_error_integral +
-                      SPINDLE_PID_KD * (rpm_error - last_rpm_error);
-    last_rpm_error = rpm_error;
-
-    // Adjust target RPM based on PID output (clamp to operational range)
-    float adjusted_rpm = spindle_rpm_target + pid_output;
-    if (adjusted_rpm < OPERATIONAL_RPM_MIN) adjusted_rpm = OPERATIONAL_RPM_MIN;
-    if (adjusted_rpm > OPERATIONAL_RPM_MAX) adjusted_rpm = OPERATIONAL_RPM_MAX;
-
-    spindle_set_speed(adjusted_rpm);
+// Return the current stepper position.  Caller must disable irqs.
+static uint32_t
+stepper_get_position(struct stepper *s)
+{
+    uint32_t position = s->position;
+    // If stepper is mid-move, subtract out steps not yet taken
+    if (s->flags & SF_SINGLE_SCHED)
+        position -= s->count;
+    else
+        position -= s->count / 2;
+    // The top bit of s->position is an optimized reverse direction flag
+    if (position & 0x80000000)
+        return -position;
+    return position;
 }
 
-// Calculate traverse position for current winding layer
+// Report the current position of the stepper
 void
-update_traverse_position(void)
+command_stepper_get_position(uint32_t *args)
 {
-    // Calculate current layer
-    uint32_t bobbin_circumference_um = 31416 * winder.bobbin_diameter_um / 10000; // π × D
-    uint32_t turns_per_layer = bobbin_circumference_um / winder.wire_diameter_um;
-    uint32_t new_layer = current_turns / turns_per_layer;
+    uint8_t oid = args[0];
+    struct stepper *s = stepper_oid_lookup(oid);
+    irq_disable();
+    uint32_t position = stepper_get_position(s);
+    irq_enable();
+    sendf("stepper_position oid=%c pos=%i", oid, position - POSITION_BIAS);
+}
+DECL_COMMAND(command_stepper_get_position, "stepper_get_position oid=%c");
 
-    if (new_layer != current_layer) {
-        current_layer = new_layer;
-
-        // Calculate traverse position for this layer
-        uint32_t traverse_position_um = current_layer * winder.wire_diameter_um;
-
-        // Convert to stepper steps and move
-        // This would use stepper.c queue_step commands
-        move_traverse_to_position(traverse_position_um);
-
-        sendf("layer_changed layer=%u position=%u", current_layer, traverse_position_um);
+// Stop all moves for a given stepper (caller must disable IRQs)
+static void
+stepper_stop(struct trsync_signal *tss, uint8_t reason)
+{
+    struct stepper *s = container_of(tss, struct stepper, stop_signal);
+    sched_del_timer(&s->time);
+    s->next_step_time = s->time.waketime = 0;
+    s->position = -stepper_get_position(s);
+    s->count = 0;
+    s->flags = ((s->flags & (SF_INVERT_STEP|SF_SINGLE_SCHED|SF_OPTIMIZED_PATH))
+                | SF_NEED_RESET);
+    gpio_out_write(s->dir_pin, 0);
+    if (!(s->flags & SF_SINGLE_SCHED)
+        || (HAVE_AVR_OPTIMIZATION && s->flags & SF_OPTIMIZED_PATH))
+        // Must return step pin to "unstep" state
+        gpio_out_write(s->step_pin, s->flags & SF_INVERT_STEP);
+    while (!move_queue_empty(&s->mq)) {
+        struct move_node *mn = move_queue_pop(&s->mq);
+        struct stepper_move *m = container_of(mn, struct stepper_move, node);
+        move_free(m);
     }
 }
 
-// Move traverse to absolute position
+// Set the stepper to stop on a "trigger event" (used in homing)
 void
-move_traverse_to_position(uint32_t position_um)
+command_stepper_stop_on_trigger(uint32_t *args)
 {
-    // Convert micrometers to stepper steps using config
-    // TRAVERSE_STEPS_PER_MM = steps per mm
-    // position_um / 1000 = position in mm
+    struct stepper *s = stepper_oid_lookup(args[0]);
+    struct trsync *ts = trsync_oid_lookup(args[1]);
+    trsync_add_signal(ts, &s->stop_signal, stepper_stop);
+}
+DECL_COMMAND(command_stepper_stop_on_trigger,
+             "stepper_stop_on_trigger oid=%c trsync_oid=%c");
 
-    // Calculate direction and relative steps
-    uint32_t current_pos_um = (winder.traverse_stepper.position * 1000) / TRAVERSE_STEPS_PER_MM; // Convert back to um
-    uint8_t direction = (position_um > current_pos_um) ? 0 : 1; // 0=forward, 1=reverse
-    uint32_t delta_steps = (position_um > current_pos_um) ?
-                          ((position_um - current_pos_um) * TRAVERSE_STEPS_PER_MM) / 1000 :
-                          ((current_pos_um - position_um) * TRAVERSE_STEPS_PER_MM) / 1000;
-
-    if (delta_steps > 0 && position_um <= MAX_TRAVERSE_POSITION_UM) {
-        stepper_move(&winder.traverse_stepper, delta_steps, direction, STEPPER_DEFAULT_INTERVAL);
+void
+stepper_shutdown(void)
+{
+    uint8_t i;
+    struct stepper *s;
+    foreach_oid(i, s, command_config_stepper) {
+        move_queue_clear(&s->mq);
+        stepper_stop(&s->stop_signal, 0);
     }
 }
+DECL_SHUTDOWN(stepper_shutdown);
 
-// Manual traverse movement
-void
-command_move_traverse(uint32_t *args)
-{
-    uint32_t distance_um = args[0];  // Micrometers
-    uint32_t speed_mm_min = args[1]; // mm/min
+// CNC Winder LED blink test
+#define LED_PIN 5  // PA5 on CLEO (User confirmed)
 
-    move_traverse_to_position(distance_um);
-    sendf("traverse_move distance=%u speed=%u", distance_um, speed_mm_min);
+static uint_fast8_t blink_callback(struct timer *timer) {
+    static uint8_t state = 0;
+    state = !state;
+
+    struct gpio_out led = gpio_out_setup(LED_PIN, state);
+    gpio_out_write(led, state);
+
+    timer->waketime = timer_read_time() + timer_from_us(500000);  // 500ms
+    return SF_RESCHEDULE;
 }
-DECL_COMMAND(command_move_traverse, "move_traverse distance_um=%u speed_mm_min=%u");
 
-// Homing sequence
-void
-command_home_all(uint32_t *args)
-{
-    // Home traverse carriage to endstop
-    // Home pickup arm to known position
-    // Zero all position counters
+void test_init(void) {
+    // Setup PA5 LED
+    struct gpio_out led = gpio_out_setup(LED_PIN, 0);
+    gpio_out_write(led, 0);
 
-    current_turns = 0;
-    current_layer = 0;
-
-    sendf("homing_completed");
+    // Setup blink timer
+    static struct timer blink_timer;
+    blink_timer.func = blink_callback;
+    blink_timer.waketime = timer_read_time() + timer_from_us(1000000);  // 1 second delay
+    sched_add_timer(&blink_timer);
 }
-DECL_COMMAND(command_home_all, "home_all");
-
-// Add periodic update to main loop (would be called from main firmware loop)
-void
-cnc_winder_periodic_update(void)
-{
-    cnc_winder_update();
-}
+DECL_INIT(test_init);

@@ -2,9 +2,7 @@
 #define __I2CCMDS_H
 
 #include <inttypes.h>
-
-// Forward declare i2c_config (defined in gpio.h)
-struct i2c_config;
+#include "board/gpio.h" // i2c_config
 
 // I2C ERROR Codes
 enum {

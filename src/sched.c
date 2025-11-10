@@ -13,7 +13,7 @@
 #include "board/pgm.h" // READP
 #include "command.h" // shutdown
 #include "sched.h" // sched_check_periodic
-//#include "stepper.h" // stepper_event
+#include "stepper.h" // stepper_event
 
 static struct timer periodic_timer, sentinel_timer, deleted_timer;
 
@@ -70,9 +70,10 @@ insert_timer(struct timer *pos, struct timer *t, uint32_t waketime)
     struct timer *prev;
     for (;;) {
         prev = pos;
-        if (0)
-            // micro optimization for AVR - reduces register pressure
-            asm("" : "+r"(prev));
+#if CONFIG_MACH_AVR
+        // micro optimization for AVR - reduces register pressure
+        asm("" : "+r"(prev));
+#endif
         pos = pos->next;
         if (timer_is_before(waketime, pos->waketime))
             break;
@@ -150,9 +151,9 @@ sched_timer_dispatch(void)
     struct timer *t = SchedStatus.timer_list;
     uint_fast8_t res;
     uint32_t updated_waketime;
-    if (0 && likely(!t->func)) {
-        // res = stepper_event(t);
-        // updated_waketime = t->waketime;
+    if (CONFIG_INLINE_STEPPER_HACK && likely(!t->func)) {
+        res = stepper_event(t);
+        updated_waketime = t->waketime;
     } else {
         res = t->func(t);
         updated_waketime = t->waketime;
