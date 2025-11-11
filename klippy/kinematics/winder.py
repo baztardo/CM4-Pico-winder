@@ -43,27 +43,77 @@ class WinderKinematics:
     
     def _home_traverse(self, homing_state):
         """Home the traverse (Y-axis)"""
+        import logging
+        logging.info("DEBUG WINDER: _home_traverse called")
+        
         position_min, position_max = self.rail.get_range()
         hi = self.rail.get_homing_info()
         
-        # Calculate force position (start from beyond max)
-        homepos = [None, hi.position_endstop, None, None]
-        forcepos = list(homepos)
+        # Get current stepper position (may be wrong if not homed, but better than assuming)
+        try:
+            current_pos = self.rail.get_commanded_position()
+        except:
+            current_pos = None
         
-        # Move to position beyond max to ensure we hit endstop
+        logging.info("DEBUG WINDER: position_min=%.2f position_max=%.2f position_endstop=%.2f positive_dir=%s current_pos=%s" 
+                    % (position_min, position_max, hi.position_endstop, hi.positive_dir, current_pos))
+        
+        # Determine homing move
+        homepos = [None, hi.position_endstop, None, None]
+        forcepos = [None, None, None, None]
+        
         if hi.positive_dir:
-            forcepos[1] = position_min - 10.0
+            # Home towards positive direction (endstop at max)
+            # Start from before endstop, move toward endstop
+            if current_pos is not None and current_pos < hi.position_endstop:
+                # Use current position + safety margin
+                forcepos[1] = max(current_pos - 20.0, position_min - 10.0)
+            else:
+                # Default: start from before endstop
+                forcepos[1] = hi.position_endstop - 1.5 * (hi.position_endstop - position_min)
         else:
-            forcepos[1] = position_max + 10.0
+            # Home towards negative direction (endstop at min, typical for traverse)
+            # Calculate based on current position, but ensure we ALWAYS move far enough
+            # The forcepos is where we START the homing move from
+            safety_margin = 50.0  # Increased from 20mm to 50mm for timing bug
+            min_forcepos = position_max + safety_margin  # Always ensure we can reach endstop
+            
+            if current_pos is not None:
+                # Use current position if it's reasonable, but never less than min_forcepos
+                if current_pos <= position_max:
+                    # Stepper thinks it's at a valid position, but we need to ensure
+                    # we move far enough to hit endstop from ANY actual position
+                    # So use max(min_forcepos, current_pos + small_margin)
+                    forcepos[1] = max(min_forcepos, current_pos + 10.0)
+                else:
+                    # Current position is invalid (e.g., 139.5mm), clamp aggressively
+                    # Use a reasonable maximum that's not too long but still safe
+                    max_reasonable = position_max + 50.0  # Increased from 30mm to 50mm
+                    forcepos[1] = max(min_forcepos, min(current_pos, max_reasonable))
+            else:
+                # Can't get current position, use min_forcepos
+                forcepos[1] = min_forcepos
+            
+            # Final clamp: never exceed 1.5x max (absolute safety limit)
+            forcepos[1] = min(forcepos[1], position_max * 1.5)
+        
+        logging.info("DEBUG WINDER: forcepos=%s homepos=%s" % (forcepos, homepos))
+        logging.info("DEBUG WINDER: Calling homing_state.home_rails()")
         
         # Perform homing
         homing_state.home_rails([self.rail], forcepos, homepos)
+        
+        logging.info("DEBUG WINDER: homing_state.home_rails() completed")
     
     def home(self, homing_state):
         """Home the Y-axis (traverse)"""
+        import logging
+        logging.info("DEBUG WINDER: home() called, axes=%s (type=%s)" % (homing_state.get_axes(), type(homing_state.get_axes())))
+        
         axes = homing_state.get_axes()
         # Check if Y-axis (index 1) needs homing
         if 'y' in axes or 1 in axes:
+            logging.info("DEBUG WINDER: Y axis found in axes, calling _home_traverse()")
             self._home_traverse(homing_state)
         else:
             # No Y-axis in homing - just set as homed if already homed
@@ -97,3 +147,4 @@ class WinderKinematics:
 
 def load_kinematics(toolhead, config):
     return WinderKinematics(toolhead, config)
+
