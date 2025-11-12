@@ -20,6 +20,13 @@ scp klippy/extras/winder.py $CM4_USER@$CM4_IP:$CM4_PATH/klippy/extras/
 echo "Copying printer config..."
 scp config/printer.cfg $CM4_USER@$CM4_IP:$CM4_PATH/config/
 
+# Copy interface scripts
+echo "Copying interface scripts..."
+scp scripts/klipper_interface.py $CM4_USER@$CM4_IP:$CM4_PATH/scripts/
+scp scripts/winder_control.py $CM4_USER@$CM4_IP:$CM4_PATH/scripts/
+scp scripts/README_INTERFACE.md $CM4_USER@$CM4_IP:$CM4_PATH/scripts/ 2>/dev/null || true
+ssh $CM4_USER@$CM4_IP "chmod +x $CM4_PATH/scripts/klipper_interface.py $CM4_PATH/scripts/winder_control.py"
+
 echo ""
 echo "Files copied! Now on CM4:"
 echo "1. Update serial port in printer.cfg if needed:"
