@@ -188,7 +188,7 @@ class KlipperInterface:
             # Success if we have "result" key (even if empty)
             if "result" in response:
                 self.last_error = None
-                return True
+            return True
         self.last_error = "No response from Klipper"
         return False
     

@@ -24,7 +24,7 @@ class WinderKinematics:
         self.limits = [(1.0, -1.0), (1.0, -1.0), (1.0, -1.0)]  # X, Y, Z
         # Set initial position (limits are invalid until homed - this is expected)
         self.rail.set_position([0., 0., 0.])
-    
+        
     def get_steppers(self):
         return list(self.rail.get_steppers())
     
@@ -106,7 +106,7 @@ class WinderKinematics:
             if end_pos[1] < self.limits[1][0] or end_pos[1] > self.limits[1][1]:
                 if self.limits[1][0] > self.limits[1][1]:
                     logging.error("DEBUG WINDER check_move: Limits invalid (not homed): %r" % (self.limits[1],))
-                    raise move.move_error("Must home Y axis first")
+                raise move.move_error("Must home Y axis first")
                 logging.error("DEBUG WINDER check_move: Move out of range: Y=%.3f limits=%r" % (end_pos[1], self.limits[1]))
                 raise move.move_error("Move out of range: Y=%.3f" % end_pos[1])
         

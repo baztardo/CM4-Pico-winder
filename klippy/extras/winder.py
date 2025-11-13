@@ -6,6 +6,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
 import stepper
+import math
 
 class WinderKinematics:
     def __init__(self, toolhead, config):
@@ -103,6 +104,10 @@ import logging
 from . import pulse_counter
 
 class WinderController:
+    # Pre-calculated constants for angle sensor (avoid recalculating in callback)
+    RAD_TO_RPM = 60.0 / (2.0 * math.pi)  # ~9.5493
+    MIN_TIME_DIFF = 0.0001  # 100 microseconds minimum for valid RPM calculation
+    
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name()
@@ -113,6 +118,8 @@ class WinderController:
         self.motor_brake_pin = config.get('motor_brake_pin', None)
         self.motor_hall_pin = config.get('motor_hall_pin', None)
         self.spindle_hall_pin = config.get('spindle_hall_pin')
+        # Optional ADC angle sensor (for better RPM accuracy)
+        self.angle_sensor_pin = config.get('angle_sensor_pin', None)
         
         # Physical parameters
         self.spindle_gear_ratio = config.getfloat('gear_ratio', 0.667, above=0.0, below=1.0)
@@ -146,8 +153,16 @@ class WinderController:
         self.motor_brake = None
         self.spindle_freq_counter = None
         self.motor_freq_counter = None
+        self.angle_sensor_adc = None  # ADC for angle sensor
         self.spindle_measured_rpm = 0.0
         self.motor_measured_rpm = 0.0
+        self.last_angle_value = None
+        self.last_angle_time = None
+        self.angle_revolutions = 0  # Track full revolutions (net forward revolutions)
+        self.angle_total_rad = 0.0  # Track cumulative angle (with revolutions)
+        # Buffer for fast sampling with 100ms reporting
+        self.angle_buffer = []  # Buffer of (time, angle) tuples
+        self.angle_buffer_max = 10  # Buffer 10 samples (10ms each = 100ms total)
         self.rpm_timer = None
         self.sync_timer = None
         self.current_layer = 0
@@ -157,6 +172,103 @@ class WinderController:
         self.is_winding = False
         self.start_position = self.spindle_edge_offset
         self.current_y_position = 0.0
+        
+        # Setup pins early so _build_config runs during MCU configuration
+        ppins = self.printer.lookup_object('pins')
+        self.motor_pwm = ppins.setup_pin('pwm', self.motor_pwm_pin)
+        self.motor_pwm.setup_max_duration(0)
+        self.motor_pwm.setup_cycle_time(0.001)
+        
+        self.motor_dir = ppins.setup_pin('digital_out', self.motor_dir_pin)
+        self.motor_dir.setup_max_duration(0)
+        
+        if self.motor_brake_pin:
+            self.motor_brake = ppins.setup_pin('digital_out', self.motor_brake_pin)
+            self.motor_brake.setup_max_duration(0)
+        
+        logging.info("Winder: Pins configured early (PWM, DIR, BRAKE)")
+        
+        # Setup Hall sensors early so they're configured during MCU config
+        if self.spindle_hall_pin:
+            logging.info("Winder: Creating spindle Hall counter on pin %s (sample=%.3fs, poll=%.3fs)" 
+                        % (self.spindle_hall_pin, self.hall_sample_time, self.hall_poll_time))
+            original_counter = pulse_counter.FrequencyCounter(
+                self.printer, 
+                self.spindle_hall_pin,
+                self.hall_sample_time,
+                self.hall_poll_time
+            )
+            # Access the underlying MCU_counter to add logging
+            mcu_counter = original_counter._counter
+            original_callback = mcu_counter._callback
+            
+            def debug_callback(time, count, count_time):
+                if not hasattr(debug_callback, '_last_count'):
+                    debug_callback._last_count = 0
+                    debug_callback._last_count = count
+                delta = count - debug_callback._last_count
+                # Only log when we see new edges
+                if delta > 0:
+                    logging.debug("Winder: Spindle counter - count=%d, delta=%d" % (count, delta))
+                debug_callback._last_count = count
+                if original_callback:
+                    original_callback(time, count, count_time)
+            
+            mcu_counter.setup_callback(debug_callback)
+            self.spindle_freq_counter = original_counter
+            logging.info("Winder: Spindle Hall sensor initialized on %s, counter OID=%d" 
+                        % (self.spindle_hall_pin, mcu_counter._oid))
+        
+        if self.motor_hall_pin:
+            logging.info("Winder: Creating motor Hall counter on pin %s (sample=%.3fs, poll=%.3fs)" 
+                        % (self.motor_hall_pin, self.hall_sample_time, self.hall_poll_time))
+            motor_counter_obj = pulse_counter.FrequencyCounter(
+                self.printer,
+                self.motor_hall_pin,
+                self.hall_sample_time,
+                self.hall_poll_time
+            )
+            # Add debug callback for motor too
+            motor_mcu_counter = motor_counter_obj._counter
+            motor_original_callback = motor_mcu_counter._callback
+            
+            def motor_debug_callback(time, count, count_time):
+                if not hasattr(motor_debug_callback, '_last_count'):
+                    motor_debug_callback._last_count = 0
+                motor_debug_callback._last_count = count
+                delta = count - motor_debug_callback._last_count
+                # Only log when we see new edges
+                if delta > 0:
+                    logging.debug("Winder: Motor counter - count=%d, delta=%d" % (count, delta))
+                motor_debug_callback._last_count = count
+                if motor_original_callback:
+                    motor_original_callback(time, count, count_time)
+            
+            motor_mcu_counter.setup_callback(motor_debug_callback)
+            self.motor_freq_counter = motor_counter_obj
+            logging.info("Winder: Motor Hall sensor initialized on %s, counter OID=%d" 
+                        % (self.motor_hall_pin, motor_mcu_counter._oid))
+        
+        # Setup ADC angle sensor if configured
+        if self.angle_sensor_pin:
+            ppins = self.printer.lookup_object('pins')
+            self.angle_sensor_adc = ppins.setup_pin('adc', self.angle_sensor_pin)
+            # Sample every 1ms, average 4 samples, but callback every 10ms for fast buffering
+            # We'll buffer 10 samples (100ms) and report averaged RPM every 100ms
+            self.angle_sensor_adc.setup_adc_sample(0.001, 4)
+            self.angle_sensor_adc.setup_adc_callback(0.01, self._angle_sensor_callback)
+            query_adc = self.printer.lookup_object('query_adc')
+            query_adc.register_adc(self.angle_sensor_pin, self.angle_sensor_adc)
+            logging.info("Winder: ADC angle sensor initialized on %s" % self.angle_sensor_pin)
+        
+        # Register event handlers (only once, not in callbacks!)
+        self.printer.register_event_handler("klippy:connect", self._handle_connect)
+        self.printer.register_event_handler("klippy:ready", self._handle_ready)
+        self.printer.register_event_handler("klippy:shutdown", self._handle_shutdown)
+        
+        logging.info("Winder: Traverse range: %.2f-%.2fmm, Winding range: %.2f-%.2fmm"
+                    % (0.0, self.traverse_max, self.start_position,
+                       self.start_position + self.bobbin_width))
         
         # Register commands
         gcode = self.printer.lookup_object('gcode')
@@ -170,53 +282,153 @@ class WinderController:
                               desc=self.cmd_SET_SPINDLE_SPEED_help)
         gcode.register_command('SET_WIRE_DIAMETER', self.cmd_SET_WIRE_DIAMETER,
                               desc=self.cmd_SET_WIRE_DIAMETER_help)
+        gcode.register_command('TEST_ANGLE_SENSOR', self.cmd_TEST_ANGLE_SENSOR,
+                              desc=self.cmd_TEST_ANGLE_SENSOR_help)
+    
+    def _angle_sensor_callback(self, read_time, read_value):
+        """Callback for ADC angle sensor - calculates RPM from angle changes
+        Sensor: 12-bit (4096 steps), 360° range, 0.088° resolution
+        Sensor VCC: 3.3V (via voltage divider from 5V supply)
+        Sensor output: 0-3.3V (0-360°) - direct connection to RP2040 ADC
+        read_value: 0.0 to 1.0 (normalized from 0-4095 ADC counts)
         
-        # Register event handlers
-        self.printer.register_event_handler("klippy:connect", self._handle_connect)
-        self.printer.register_event_handler("klippy:ready", self._handle_ready)
-        self.printer.register_event_handler("klippy:shutdown", self._handle_shutdown)
+        Fast sampling (10ms): Buffer samples for accurate RPM calculation
+        Reporting (100ms): Average buffered samples and update RPM
         
-        logging.info("Winder: Traverse range: %.2f-%.2fmm, Winding range: %.2f-%.2fmm"
-                    % (0.0, self.traverse_max, self.start_position,
-                       self.start_position + self.bobbin_width))
+        NOTE: This callback must be FAST to meet Klipper timing constraints.
+        Keep calculations minimal, logging async, and avoid blocking operations.
+        """
+        # Convert normalized ADC value (0.0-1.0) to radians (0-2π)
+        # Note: Without voltage divider, 5V sensor saturates ADC at 3.3V (read_value = 1.0)
+        # Clamp to prevent issues when sensor outputs > 3.3V
+        clamped_value = min(1.0, max(0.0, read_value))
+        current_angle_rad = clamped_value * 2.0 * math.pi
+        current_angle_deg = current_angle_rad * 180.0 / math.pi
+        
+        # Debug: Log raw ADC value less frequently now that it's working
+        if not hasattr(self, '_adc_debug_count'):
+            self._adc_debug_count = 0
+        self._adc_debug_count += 1
+        # Log every 50 readings = 500ms (less spam now that it's working)
+        if self._adc_debug_count % 50 == 0:
+            reactor = self.printer.get_reactor()
+            reactor.register_async_callback(
+                lambda et, rv=read_value, cad=current_angle_deg: logging.info(
+                    "Winder: ADC debug - raw_value=%.4f, angle=%.2f°" 
+                    % (rv, cad)))
+        
+        # Add to buffer (fast sampling every 10ms)
+        self.angle_buffer.append((read_time, current_angle_rad))
+        
+        # Keep only last N samples (10 samples = 100ms at 10ms intervals)
+        if len(self.angle_buffer) > self.angle_buffer_max:
+            self.angle_buffer.pop(0)
+        
+        # Process buffer every 100ms (when we have 10 samples)
+        if len(self.angle_buffer) >= self.angle_buffer_max:
+            # Get first and last samples from buffer
+            first_time, first_angle = self.angle_buffer[0]
+            last_time, last_angle = self.angle_buffer[-1]
+            
+            # Debug: Check if angle is actually changing
+            angle_diff_rad_raw = last_angle - first_angle
+            # Show raw ADC values from buffer for debugging
+            first_adc_raw = first_angle / (2.0 * math.pi)  # Convert back to 0-1.0
+            last_adc_raw = last_angle / (2.0 * math.pi)
+            
+            if abs(angle_diff_rad_raw) < 0.01:  # Less than 0.57° change over 100ms
+                # Angle not changing significantly - log debug info with raw ADC values
+                reactor = self.printer.get_reactor()
+                reactor.register_async_callback(
+                    lambda et: logging.warning(
+                        "Winder: Angle sensor NOT changing! ADC: %.4f->%.4f (diff=%.4f), Angle: %.2f°->%.2f° (diff=%.4f rad = %.2f°)" 
+                        % (first_adc_raw, last_adc_raw, last_adc_raw - first_adc_raw,
+                           first_angle * 180.0 / math.pi, last_angle * 180.0 / math.pi, 
+                           angle_diff_rad_raw, angle_diff_rad_raw * 180.0 / math.pi)))
+            
+            # Calculate total angle change (handle wraparound)
+            angle_diff_rad = angle_diff_rad_raw
+            
+            # Handle wraparound - use unwrapped angle tracking for better accuracy
+            # Track cumulative angle to avoid wraparound issues
+            if not hasattr(self, '_last_unwrapped_angle'):
+                self._last_unwrapped_angle = first_angle
+                self.angle_total_rad = first_angle
+            
+            # Calculate change from last unwrapped angle
+            unwrapped_diff = last_angle - self._last_unwrapped_angle
+            
+            # Handle wraparound by finding shortest path
+            if unwrapped_diff > math.pi:
+                # Large positive jump: wraparound backward (e.g., 10° -> 350°)
+                unwrapped_diff -= 2.0 * math.pi
+            elif unwrapped_diff < -math.pi:
+                # Large negative jump: wraparound forward (e.g., 350° -> 10°)
+                unwrapped_diff += 2.0 * math.pi
+            
+            # Update total angle and revolutions
+            self.angle_total_rad += unwrapped_diff
+            self.angle_revolutions = int(self.angle_total_rad / (2.0 * math.pi))
+            self._last_unwrapped_angle = last_angle
+            
+            # Use the unwrapped difference for RPM calculation
+            angle_diff_rad = unwrapped_diff
+            
+            # Calculate time difference over the buffer period
+            time_diff = last_time - first_time
+            
+            if time_diff > self.MIN_TIME_DIFF:
+                # Calculate angular velocity (rad/s) over the buffer period
+                angular_velocity_rad_s = angle_diff_rad / time_diff
+                calculated_rpm = abs(angular_velocity_rad_s) * self.RAD_TO_RPM
+                
+                # Use exponential moving average to smooth RPM
+                if not hasattr(self, '_angle_smoothed_rpm'):
+                    self._angle_smoothed_rpm = calculated_rpm
+                else:
+                    alpha = 0.3  # Smoothing factor
+                    self._angle_smoothed_rpm = alpha * calculated_rpm + (1.0 - alpha) * self._angle_smoothed_rpm
+                
+                self.spindle_measured_rpm = self._angle_smoothed_rpm
+                
+                # Log asynchronously every 100ms (when buffer is processed)
+                reactor = self.printer.get_reactor()
+                current_angle_deg = last_angle * 180.0 / math.pi
+                reactor.register_async_callback(
+                    lambda et: logging.info(
+                        "Winder: Angle sensor - angle=%.2f°, RPM=%.1f, revs=%d" 
+                        % (current_angle_deg, self.spindle_measured_rpm, self.angle_revolutions)))
+            
+            # Clear buffer for next 100ms period
+            self.angle_buffer = []
+        
+        # Update last values for tracking (used by status commands)
+        self.last_angle_value = current_angle_rad
+        self.last_angle_time = read_time
     
     def _handle_connect(self):
         """Setup hardware after MCU connects"""
         logging.info("Winder: Setting up hardware...")
         
-        ppins = self.printer.lookup_object('pins')
-        self.motor_pwm = ppins.setup_pin('pwm', self.motor_pwm_pin)
-        self.motor_pwm.setup_max_duration(0)
-        self.motor_pwm.setup_cycle_time(0.001)
+        # Pins are already set up in __init__, but verify they're ready
+        if self.motor_pwm and hasattr(self.motor_pwm, '_set_cmd'):
+            if self.motor_pwm._set_cmd is None:
+                logging.warning("Winder: PWM _set_cmd still None after connect")
+            else:
+                logging.info("Winder: PWM pin ready - _set_cmd configured")
+        else:
+            logging.error("Winder: PWM pin not set up!")
         
-        self.motor_dir = ppins.setup_pin('digital_out', self.motor_dir_pin)
-        self.motor_dir.setup_max_duration(0)
-        
-        if self.motor_brake_pin:
-            self.motor_brake = ppins.setup_pin('digital_out', self.motor_brake_pin)
-            self.motor_brake.setup_max_duration(0)
-        
-        logging.info("Winder: Pins configured, Start position = %.2fmm from home" 
+        logging.info("Winder: Start position = %.2fmm from home" 
                     % self.start_position)
         
-        # Setup Hall sensors
-        if self.spindle_hall_pin:
-            self.spindle_freq_counter = pulse_counter.FrequencyCounter(
-                self.printer, 
-                self.spindle_hall_pin,
-                self.hall_sample_time,
-                self.hall_poll_time
-            )
-            logging.info("Winder: Spindle Hall sensor initialized on %s" % self.spindle_hall_pin)
-        
-        if self.motor_hall_pin:
-            self.motor_freq_counter = pulse_counter.FrequencyCounter(
-                self.printer,
-                self.motor_hall_pin,
-                self.hall_sample_time,
-                self.hall_poll_time
-            )
-            logging.info("Winder: Motor Hall sensor initialized on %s" % self.motor_hall_pin)
+        # Hall sensors are already set up in __init__, just verify
+        if self.spindle_freq_counter:
+            logging.info("Winder: Spindle Hall counter ready (OID=%d)" 
+                        % self.spindle_freq_counter._counter._oid)
+        if self.motor_freq_counter:
+            logging.info("Winder: Motor Hall counter ready (OID=%d)" 
+                        % self.motor_freq_counter._counter._oid)
         
         # Register timers
         reactor = self.printer.get_reactor()
@@ -243,13 +455,79 @@ class WinderController:
             if state != 'ready':
                 return eventtime + 0.5
             
-            if self.spindle_freq_counter:
+            # Use angle sensor if available (more accurate than Hall sensor)
+            if self.angle_sensor_adc:
+                # Angle sensor RPM is calculated in callback, just read it here
+                pass  # RPM already updated in _angle_sensor_callback
+            elif self.spindle_freq_counter:
                 freq = self.spindle_freq_counter.get_frequency()
-                self.spindle_measured_rpm = freq * 60.0
+                # FrequencyCounter counts edges (both rising and falling)
+                # For spindle_hall_ppr=1, 1 pulse = 2 edges
+                # RPM = (freq / edges_per_rev) * 60
+                edges_per_rev = 2 * self.spindle_hall_ppr
+                
+                if freq > 0:
+                    calculated_rpm = (freq / edges_per_rev) * 60.0
+                    # Apply calibration: if measured 10 Hz gives 300 RPM but real is 529 RPM
+                    # Calibration factor = 529 / 300 = 1.763
+                    calibration_factor = 529.0 / 300.0  # Based on your measurement
+                    new_rpm = calculated_rpm * calibration_factor
+                    
+                    # Use exponential moving average to smooth RPM and reduce flickering
+                    # Alpha = 0.3 means 30% new value, 70% old value (smoother)
+                    if not hasattr(self, '_spindle_smoothed_rpm'):
+                        self._spindle_smoothed_rpm = new_rpm
+                    else:
+                        alpha = 0.3  # Smoothing factor (0.0-1.0, lower = smoother)
+                        self._spindle_smoothed_rpm = alpha * new_rpm + (1.0 - alpha) * self._spindle_smoothed_rpm
+                    
+                    self.spindle_measured_rpm = self._spindle_smoothed_rpm
+                    # Reset zero count when we get valid readings
+                    if hasattr(self, '_spindle_zero_count'):
+                        self._spindle_zero_count = 0
+                else:
+                    # If freq is 0, keep last known RPM for a short time to avoid flickering
+                    # Only set to 0 if we've had no edges for a while
+                    if not hasattr(self, '_spindle_zero_count'):
+                        self._spindle_zero_count = 0
+                        if not hasattr(self, '_spindle_smoothed_rpm'):
+                            self.spindle_measured_rpm = 0.0
+                    else:
+                        self._spindle_zero_count += 1
+                        # After 10 consecutive zero readings (~1 second), set to 0
+                        if self._spindle_zero_count > 10:
+                            self.spindle_measured_rpm = 0.0
+                            if hasattr(self, '_spindle_smoothed_rpm'):
+                                self._spindle_smoothed_rpm = 0.0
+                        # Otherwise keep last value (don't update)
+                
+                # Log RPM occasionally or when it changes significantly
+                if not hasattr(self, '_rpm_log_count'):
+                    self._rpm_log_count = 0
+                    self._last_logged_rpm = 0.0
+                self._rpm_log_count += 1
+                # Log every 50 updates or when RPM changes by more than 10
+                if self._rpm_log_count % 50 == 0 or abs(self.spindle_measured_rpm - self._last_logged_rpm) > 10:
+                    logging.info("Winder: Spindle Hall - freq=%.3f Hz, RPM=%.1f" 
+                                % (freq, self.spindle_measured_rpm))
+                    self._last_logged_rpm = self.spindle_measured_rpm
             
             if self.motor_freq_counter:
                 freq = self.motor_freq_counter.get_frequency()
-                self.motor_measured_rpm = (freq * 60.0) / 6.0
+                # Motor has 8 poles, so 8 pulses per revolution
+                # FrequencyCounter counts edges, so 8 pulses = 16 edges per revolution
+                edges_per_rev = 2 * self.motor_poles
+                self.motor_measured_rpm = (freq / edges_per_rev) * 60.0 if freq > 0 else 0.0
+                
+                if not hasattr(self, '_motor_rpm_log_count'):
+                    self._motor_rpm_log_count = 0
+                    self._last_logged_motor_rpm = 0.0
+                self._motor_rpm_log_count += 1
+                # Log every 50 updates or when RPM changes by more than 10
+                if self._motor_rpm_log_count % 50 == 0 or (freq > 0 and abs(self.motor_measured_rpm - self._last_logged_motor_rpm) > 10):
+                    logging.info("Winder: Motor Hall - freq=%.3f Hz, RPM=%.1f" 
+                                % (freq, self.motor_measured_rpm))
+                    self._last_logged_motor_rpm = self.motor_measured_rpm
             
             return eventtime + self.hall_poll_time
             
@@ -299,20 +577,27 @@ class WinderController:
         self.is_winding = False
         
         toolhead = self.printer.lookup_object('toolhead')
-        eventtime = toolhead.get_reactor().monotonic()
-        print_time = toolhead.mcu.estimated_print_time(eventtime)
         
-        try:
-            if self.motor_pwm:
-                self.motor_pwm.set_pwm(print_time, 0.0)
-        except AttributeError:
-            logging.warning("Winder: Motor PWM pin not ready")
+        # Use lookahead callback to avoid "Timer too close" errors
+        def stop_callback(print_time):
+            # Ensure minimum spacing between commands
+            min_spacing = 0.1
+            print_time = max(print_time, toolhead.get_last_move_time() + min_spacing)
+            
+            try:
+                if self.motor_pwm:
+                    if hasattr(self.motor_pwm, '_set_cmd') and self.motor_pwm._set_cmd is not None:
+                        self.motor_pwm.set_pwm(print_time, 0.0)
+            except (AttributeError, Exception) as e:
+                logging.warning("Winder: Motor PWM pin error during stop: %s" % e)
+            
+            try:
+                if self.motor_brake:
+                    self.motor_brake.set_digital(print_time, 1)  # 1 = brake engaged
+            except (AttributeError, Exception) as e:
+                logging.warning("Winder: Motor brake pin error during stop: %s" % e)
         
-        try:
-            if self.motor_brake:
-                self.motor_brake.set_digital(print_time, 1)
-        except AttributeError:
-            logging.warning("Winder: Motor brake pin not ready")
+        toolhead.register_lookahead_callback(stop_callback)
         
         logging.info("Winder: Motor stopped")
     
@@ -329,20 +614,43 @@ class WinderController:
         pwm_duty = min(motor_rpm / self.max_motor_rpm, 1.0)
         
         toolhead = self.printer.lookup_object('toolhead')
-        eventtime = toolhead.get_reactor().monotonic()
-        print_time = toolhead.mcu.estimated_print_time(eventtime)
         
-        try:
-            if self.motor_brake:
-                self.motor_brake.set_digital(print_time, 0)
-        except AttributeError:
-            logging.warning("Winder: Motor brake pin not ready")
+        # Use lookahead callback to ensure print_time is properly scheduled
+        # Add a small delay to avoid "Timer too close" errors
+        def set_pwm_callback(print_time):
+            # Ensure minimum spacing between commands (0.1s = 100ms)
+            min_spacing = 0.1
+            print_time = max(print_time, toolhead.get_last_move_time() + min_spacing)
+            
+            try:
+                # Set direction pin (forward = 0, reverse = 1)
+                if self.motor_dir:
+                    self.motor_dir.set_digital(print_time, 0)  # Forward
+            except (AttributeError, Exception) as e:
+                logging.warning("Winder: Motor direction pin error: %s" % e)
+            
+            try:
+                # Release brake
+                if self.motor_brake:
+                    self.motor_brake.set_digital(print_time, 0)  # 0 = brake released
+            except (AttributeError, Exception) as e:
+                logging.warning("Winder: Motor brake pin error: %s" % e)
+            
+            try:
+                # Set PWM
+                if self.motor_pwm:
+                    # Check if PWM is ready (has _set_cmd configured)
+                    if not hasattr(self.motor_pwm, '_set_cmd') or self.motor_pwm._set_cmd is None:
+                        logging.warning("Winder: Motor PWM pin not ready - _set_cmd not configured yet")
+                        return
+                    self.motor_pwm.set_pwm(print_time, pwm_duty)
+                    logging.debug("Winder: PWM set - pwm_duty=%.3f (%.1f%%)" % (pwm_duty, pwm_duty * 100))
+                else:
+                    logging.warning("Winder: Motor PWM pin is None")
+            except (AttributeError, Exception) as e:
+                logging.warning("Winder: Motor PWM pin error: %s" % e)
         
-        try:
-            if self.motor_pwm:
-                self.motor_pwm.set_pwm(print_time, pwm_duty)
-        except AttributeError:
-            logging.warning("Winder: Motor PWM pin not ready")
+        toolhead.register_lookahead_callback(set_pwm_callback)
         
         logging.info("Winder: Motor speed set - Motor=%.1f RPM (%.1f%%), Spindle=%.1f RPM" 
                     % (motor_rpm, pwm_duty * 100, self.spindle_rpm_target))
@@ -353,7 +661,8 @@ class WinderController:
             return
         
         toolhead = self.printer.lookup_object('toolhead')
-        eventtime = toolhead.get_reactor().monotonic()
+        reactor = self.printer.get_reactor()
+        eventtime = reactor.monotonic()
         print_time = toolhead.mcu.estimated_print_time(eventtime)
         
         try:
@@ -436,7 +745,16 @@ class WinderController:
     cmd_WINDER_STATUS_help = "Report winder status"
     def cmd_WINDER_STATUS(self, gcmd):
         motor_status = "%.1f RPM" % self.motor_measured_rpm if self.motor_freq_counter else "N/A"
-        spindle_status = "%.1f RPM" % self.spindle_measured_rpm if self.spindle_freq_counter else "N/A"
+        # Check if using angle sensor or Hall sensor
+        if self.angle_sensor_adc:
+            current_angle = self.last_angle_value * 180.0 / math.pi if self.last_angle_value is not None else 0.0
+            spindle_status = "%.1f RPM (Angle: %.1f°, Revs: %d)" % (
+                self.spindle_measured_rpm, current_angle, 
+                self.angle_revolutions if hasattr(self, 'angle_revolutions') else 0)
+        elif self.spindle_freq_counter:
+            spindle_status = "%.1f RPM" % self.spindle_measured_rpm
+        else:
+            spindle_status = "N/A"
         
         status = ("Winder Status:\n"
                  "  Active: %s\n"
@@ -465,6 +783,42 @@ class WinderController:
         diameter = gcmd.get_float('DIAMETER')
         self.wire_diameter = diameter
         gcmd.respond_info("Wire diameter set to %.4f mm" % diameter)
+    
+    cmd_TEST_ANGLE_SENSOR_help = "Test angle sensor - shows current reading"
+    def cmd_TEST_ANGLE_SENSOR(self, gcmd):
+        """Test command to read angle sensor directly"""
+        if not self.angle_sensor_adc:
+            gcmd.respond_info("ERROR: Angle sensor not configured (check angle_sensor_pin in config)")
+            return
+        
+        # Get last ADC reading
+        last_value, last_time = self.angle_sensor_adc.get_last_value()
+        
+        if last_value is None:
+            gcmd.respond_info("Angle sensor: No reading yet (waiting for first sample)")
+            return
+        
+        # Convert to angle
+        angle_deg = last_value * 360.0
+        angle_rad = angle_deg * math.pi / 180.0
+        
+        # Show raw ADC value for debugging
+        gcmd.respond_info("DEBUG: Raw ADC value = %.4f (should change 0.0-1.0 as you rotate)" % last_value)
+        
+        # Show current status
+        info = ("Angle Sensor Test:\n"
+               "  ADC Value: %.4f (0.0-1.0)\n"
+               "  Angle: %.2f° (%.3f rad)\n"
+               "  Last Reading: %.3f seconds ago\n"
+               "  Current RPM: %.1f\n"
+               "  Total Revolutions: %d" 
+               % (last_value, angle_deg, angle_rad, 
+                  self.printer.get_reactor().monotonic() - last_time if last_time else 0.0,
+                  self.spindle_measured_rpm,
+                  self.angle_revolutions if hasattr(self, 'angle_revolutions') else 0))
+        
+        gcmd.respond_info(info)
+        gcmd.respond_info("Rotate the sensor manually to see values change. Use WINDER_STATUS to monitor RPM.")
     
     def get_status(self, eventtime):
         """Return status for web interface"""
