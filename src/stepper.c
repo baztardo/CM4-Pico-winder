@@ -390,30 +390,3 @@ stepper_shutdown(void)
     }
 }
 DECL_SHUTDOWN(stepper_shutdown);
-
-// CNC Winder LED blink test
-#define LED_PIN 5  // PA5 on CLEO (User confirmed)
-
-static uint_fast8_t blink_callback(struct timer *timer) {
-    static uint8_t state = 0;
-    state = !state;
-
-    struct gpio_out led = gpio_out_setup(LED_PIN, state);
-    gpio_out_write(led, state);
-
-    timer->waketime = timer_read_time() + timer_from_us(500000);  // 500ms
-    return SF_RESCHEDULE;
-}
-
-void test_init(void) {
-    // Setup PA5 LED
-    struct gpio_out led = gpio_out_setup(LED_PIN, 0);
-    gpio_out_write(led, 0);
-
-    // Setup blink timer
-    static struct timer blink_timer;
-    blink_timer.func = blink_callback;
-    blink_timer.waketime = timer_read_time() + timer_from_us(1000000);  // 1 second delay
-    sched_add_timer(&blink_timer);
-}
-DECL_INIT(test_init);

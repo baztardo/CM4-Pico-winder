@@ -10,28 +10,41 @@ config LOW_LEVEL_OPTIONS
 
 choice
     prompt "Micro-controller Architecture"
+    config MACH_AVR
+        bool "Atmega AVR"
+    config MACH_ATSAM
+        bool "SAM3/SAM4/SAM E70"
+    config MACH_ATSAMD
+        bool "SAMC21/SAMD21/SAMD51/SAME5x"
+    config MACH_LPC176X
+        bool "LPC176x"
     config MACH_STM32
         bool "STMicroelectronics STM32"
+    config MACH_HC32F460
+        bool "Huada Semiconductor HC32F460"
     config MACH_RPXXXX
         bool "Raspberry Pi RP2040/RP235x"
+    config MACH_PRU
+        bool "Beaglebone PRU"
+    config MACH_AR100
+        bool "Allwinner A64 AR100"
     config MACH_LINUX
         bool "Linux process"
     config MACH_SIMU
         bool "Host simulator"
 endchoice
 
-# MCU-specific configurations (commented out removed MCUs)
-# source "src/avr/Kconfig"        # AVR - removed
-# source "src/atsam/Kconfig"      # SAM - removed
-# source "src/atsamd/Kconfig"     # SAMD - removed
-# source "src/lpc176x/Kconfig"    # LPC - removed
-source "src/stm32/Kconfig"       # STM32 - keep for CNC development
-# source "src/hc32f460/Kconfig"   # HC32 - removed
-source "src/rp2040/Kconfig"     # RP2040 - removed
-# source "src/pru/Kconfig"        # PRU - removed
-# source "src/ar100/Kconfig"      # AR100 - removed
-# source "src/linux/Kconfig"      # Linux - removed
-# source "src/simulator/Kconfig"  # Simulator - removed
+source "src/avr/Kconfig"
+source "src/atsam/Kconfig"
+source "src/atsamd/Kconfig"
+source "src/lpc176x/Kconfig"
+source "src/stm32/Kconfig"
+source "src/hc32f460/Kconfig"
+source "src/rp2040/Kconfig"
+source "src/pru/Kconfig"
+source "src/ar100/Kconfig"
+source "src/linux/Kconfig"
+source "src/simulator/Kconfig"
 
 # Generic configuration options for serial ports
 config SERIAL
@@ -75,15 +88,14 @@ config USB_SERIAL_NUMBER
 endmenu
 
 # Optional features that can be disabled (for devices with small flash sizes)
-# Defaults optimized for CNC winder application
 config WANT_ADC
     bool
     depends on HAVE_GPIO_ADC
-    default y  # Keep for analog sensors (tension, position)
+    default y
 config WANT_SPI
     bool
     depends on HAVE_GPIO && HAVE_GPIO_SPI
-    default y  # Keep for TMC drivers and external chips
+    default y
 config WANT_SOFTWARE_SPI
     bool
     depends on WANT_SPI
@@ -91,7 +103,7 @@ config WANT_SOFTWARE_SPI
 config WANT_I2C
     bool
     depends on HAVE_GPIO && HAVE_GPIO_I2C
-    default y  # Keep for external sensors/displays
+    default y
 config WANT_SOFTWARE_I2C
     bool
     depends on WANT_I2C
@@ -99,27 +111,80 @@ config WANT_SOFTWARE_I2C
 config WANT_HARD_PWM
     bool
     depends on HAVE_GPIO_HARD_PWM
-    default y  # Keep for motor speed/tension control
+    default y
 config WANT_BUTTONS
     bool
     depends on HAVE_GPIO
-    default y  # Keep for physical controls (start/stop/jog)
+    default y
 config WANT_TMCUART
     bool
     depends on HAVE_GPIO
-    default y  # Keep for TMC stepper driver control
+    default y
 config WANT_NEOPIXEL
     bool
     depends on HAVE_GPIO
-    default n  # Disabled - LED strips not needed for CNC winder
+    default y
 config WANT_PULSE_COUNTER
     bool
     depends on HAVE_GPIO
-    default y  # Keep for encoder feedback
+    default y
+config WANT_ST7920
+    bool
+    depends on HAVE_GPIO
+    default y
+config WANT_HD44780
+    bool
+    depends on HAVE_GPIO
+    default y
+config WANT_ADXL345
+    bool
+    depends on WANT_SPI
+    default y
+config WANT_LIS2DW
+    bool
+    depends on WANT_SPI || WANT_I2C
+    default y
+config WANT_MPU9250
+    bool
+    depends on WANT_I2C
+    default y
+config WANT_ICM20948
+    bool
+    depends on WANT_I2C
+    default y
 config WANT_THERMOCOUPLE
     bool
     depends on WANT_SPI
-    default n  # Disabled - temperature sensing not needed for CNC winder
+    default y
+config WANT_HX71X
+    bool
+    depends on HAVE_GPIO
+    default y
+config WANT_ADS1220
+    bool
+    depends on WANT_SPI
+    default y
+config WANT_LDC1612
+    bool
+    depends on WANT_I2C
+    default y
+config WANT_SENSOR_ANGLE
+    bool
+    depends on WANT_SPI
+    default y
+config NEED_SENSOR_BULK
+    bool
+    depends on WANT_ADXL345 || WANT_LIS2DW || WANT_MPU9250 || WANT_ICM20948 \
+        || WANT_HX71X || WANT_ADS1220 || WANT_LDC1612 || WANT_SENSOR_ANGLE
+    default y
+config WANT_LOAD_CELL_PROBE
+    bool
+    depends on WANT_HX71X || WANT_ADS1220
+    default y
+config NEED_SOS_FILTER
+    bool
+    depends on WANT_LOAD_CELL_PROBE
+    default y
 menu "Optional features (to reduce code size)"
     depends on HAVE_LIMITED_CODE_SIZE
 config WANT_ADC
@@ -147,14 +212,49 @@ config WANT_TMCUART
     bool "Support Trinamic stepper motor driver UART communication"
     depends on HAVE_GPIO
 config WANT_NEOPIXEL
-    bool "Support 'neopixel' type LED control (NOT needed for CNC winder)"
+    bool "Support 'neopixel' type LED control"
     depends on HAVE_GPIO
 config WANT_PULSE_COUNTER
-    bool "Support encoder/tachometer pulse counting"
+    bool "Support measuring fan tachometer GPIO pins"
     depends on HAVE_GPIO
-comment "External sensor chips (NOT needed for CNC winder)"
+comment "LCD chips"
+config WANT_ST7920
+    bool "Support ST7920 LCD display"
+    depends on HAVE_GPIO
+config WANT_HD44780
+    bool "Support HD44780 LCD display"
+    depends on HAVE_GPIO
+comment "Accelerometer chips"
+    depends on WANT_SPI || WANT_I2C
+config WANT_ADXL345
+    bool "Support adxl accelerometers"
+    depends on WANT_SPI
+config WANT_LIS2DW
+    bool "Support lis2dw and lis3dh 3-axis accelerometers"
+    depends on WANT_SPI || WANT_I2C
+config WANT_MPU9250
+    bool "Support MPU accelerometers"
+    depends on WANT_I2C
+config WANT_ICM20948
+    bool "Support ICM20948 accelerometer"
+    depends on WANT_I2C
+comment "External ADC type chips"
 config WANT_THERMOCOUPLE
     bool "Support thermocouple MAX sensors"
+    depends on WANT_SPI
+config WANT_HX71X
+    bool "Support HX711 and HX717 ADC chips"
+    depends on HAVE_GPIO
+config WANT_ADS1220
+    bool "Support ADS 1220 ADC chip"
+    depends on WANT_SPI
+comment "Other external sensor chips"
+    depends on WANT_SPI || WANT_I2C
+config WANT_LDC1612
+    bool "Support ldc1612 eddy current sensor"
+    depends on WANT_I2C
+config WANT_SENSOR_ANGLE
+    bool "Support angle sensors"
     depends on WANT_SPI
 endmenu
 

@@ -70,10 +70,9 @@ insert_timer(struct timer *pos, struct timer *t, uint32_t waketime)
     struct timer *prev;
     for (;;) {
         prev = pos;
-#if CONFIG_MACH_AVR
-        // micro optimization for AVR - reduces register pressure
-        asm("" : "+r"(prev));
-#endif
+        if (CONFIG_MACH_AVR)
+            // micro optimization for AVR - reduces register pressure
+            asm("" : "+r"(prev));
         pos = pos->next;
         if (timer_is_before(waketime, pos->waketime))
             break;

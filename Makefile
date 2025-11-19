@@ -66,7 +66,7 @@ $(OUT)%.o: %.c $(OUT)autoconf.h
 
 $(OUT)%.ld: %.lds.S $(OUT)autoconf.h
 	@echo "  Preprocessing $@"
-	$(Q)$(CC) -E -I$(OUT) -P -MD -MT $@ $< -o $@
+	$(Q)$(CPP) -I$(OUT) -P -MD -MT $@ $< -o $@
 
 $(OUT)klipper.elf: $(OBJS_klipper.elf)
 	@echo "  Linking $@"

@@ -1,7 +1,0 @@
-#ifndef _CNC_WINDER_CONFIG_H
-#define _CNC_WINDER_CONFIG_H
-
-// STM32F401RE LED pin
-#define SCHED_HEARTBEAT_PIN 45  // PC13
-
-#endif

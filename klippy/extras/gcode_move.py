@@ -38,22 +38,15 @@ class GCodeMove:
         self.saved_states = {}
         self.move_transform = self.move_with_transform = None
         self.position_with_transform = (lambda: [0., 0., 0., 0.])
-        self._homing_in_progress = False
         # Register callbacks
         printer.register_event_handler("klippy:ready", self._handle_ready)
         printer.register_event_handler("klippy:shutdown", self._handle_shutdown)
         printer.register_event_handler("klippy:analyze_shutdown",
                                        self._handle_analyze_shutdown)
         printer.register_event_handler("toolhead:set_position",
-                                       self._on_set_position)
+                                       self.reset_last_position)
         printer.register_event_handler("toolhead:manual_move",
                                        self.reset_last_position)
-        # Try to register homing begin event (may not exist in all Klipper versions)
-        try:
-            printer.register_event_handler("homing:home_rails_begin",
-                                         self._on_home_begin)
-        except:
-            pass  # Event may not exist in this Klipper version
         printer.register_event_handler("toolhead:update_extra_axes",
                                        self._update_extra_axes)
         printer.register_event_handler("gcode:command_error",
@@ -83,14 +76,7 @@ class GCodeMove:
         self.reset_last_position()
         self.extrude_factor = 1.
         self.base_position[3] = self.last_position[3]
-    def _on_home_begin(self, homing_state, rails):
-        self._homing_in_progress = True
-    def _on_set_position(self):
-        # Don't reset last_position during homing - it will be reset at the end
-        if not self._homing_in_progress:
-            self.reset_last_position()
     def _handle_home_rails_end(self, homing_state, rails):
-        self._homing_in_progress = False
         self.reset_last_position()
         for axis in homing_state.get_axes():
             self.base_position[axis] = self.homing_position[axis]
@@ -127,10 +113,7 @@ class GCodeMove:
         }
     def reset_last_position(self):
         if self.is_printer_ready:
-            import logging
-            old_pos = list(self.last_position)
             self.last_position = self.position_with_transform()
-            logging.info("DEBUG GCODE_MOVE reset_last_position: old=%s new=%s" % (old_pos, self.last_position))
     def _update_extra_axes(self):
         toolhead = self.printer.lookup_object('toolhead')
         axis_map = {'X':0, 'Y': 1, 'Z': 2, 'E': 3}
@@ -148,9 +131,7 @@ class GCodeMove:
     # G-Code movement commands
     def cmd_G1(self, gcmd):
         # Move
-        import logging
         params = gcmd.get_command_parameters()
-        logging.info("DEBUG GCODE_MOVE cmd_G1: params=%s last_position=%s base_position=%s absolute_coord=%s" % (params, self.last_position, self.base_position, self.absolute_coord))
         try:
             for axis, pos in self.axis_map.items():
                 if axis in params:
@@ -166,7 +147,6 @@ class GCodeMove:
                     else:
                         # value relative to base coordinate position
                         self.last_position[pos] = v + self.base_position[pos]
-                    logging.info("DEBUG GCODE_MOVE cmd_G1: axis=%s v=%.3f absolute_coord=%s last_position[%d]=%.3f" % (axis, v, absolute_coord, pos, self.last_position[pos]))
             if 'F' in params:
                 gcode_speed = float(params['F'])
                 if gcode_speed <= 0.:
@@ -176,17 +156,7 @@ class GCodeMove:
         except ValueError as e:
             raise gcmd.error("Unable to parse move '%s'"
                              % (gcmd.get_commandline(),))
-        logging.info("DEBUG GCODE_MOVE cmd_G1: calling move_with_transform with last_position=%s speed=%.3f" % (self.last_position, self.speed))
         self.move_with_transform(self.last_position, self.speed)
-        # Update last_position to match the actual move end position
-        # This ensures subsequent moves use the correct starting position
-        toolhead = self.printer.lookup_object('toolhead')
-        actual_pos = toolhead.get_position()
-        logging.info("DEBUG GCODE_MOVE cmd_G1: after move, toolhead.get_position()=%s, updating last_position from %s" % (actual_pos, self.last_position))
-        # Only update if the move actually changed position
-        if any(abs(actual_pos[i] - self.last_position[i]) > 0.0001 for i in range(3)):
-            self.last_position[:3] = actual_pos[:3]
-            logging.info("DEBUG GCODE_MOVE cmd_G1: updated last_position to %s" % self.last_position)
     # G-Code coordinate manipulation
     def cmd_G20(self, gcmd):
         # Set units to inches

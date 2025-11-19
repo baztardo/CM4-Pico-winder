@@ -379,11 +379,6 @@ class ToolHead:
     def get_position(self):
         return list(self.commanded_pos)
     def set_position(self, newpos, homing_axes=""):
-        import logging
-        import traceback
-        logging.info("DEBUG TOOLHEAD set_position: newpos=%s homing_axes=%s called from:" % (newpos, homing_axes))
-        for line in traceback.format_stack()[-5:-1]:
-            logging.info("  %s" % line.strip())
         self.flush_step_generation()
         ffi_main, ffi_lib = chelper.get_ffi()
         ffi_lib.trapq_set_position(self.trapq, self.print_time,
@@ -396,14 +391,10 @@ class ToolHead:
         if last_move is not None:
             last_move.limit_next_junction_speed(speed)
     def move(self, newpos, speed):
-        import logging
-        logging.info("DEBUG TOOLHEAD move: newpos=%s speed=%.3f commanded_pos=%s" % (newpos, speed, self.commanded_pos))
         move = Move(self, self.commanded_pos, newpos, speed)
         if not move.move_d:
-            logging.info("DEBUG TOOLHEAD move: move_d=0, returning early")
             return
         if move.is_kinematic_move:
-            logging.info("DEBUG TOOLHEAD move: calling kin.check_move")
             self.kin.check_move(move)
         for e_index, ea in enumerate(self.extra_axes):
             if move.axes_d[e_index + 3]:
