@@ -14,6 +14,7 @@ test -f extras/winder.py && echo "✅ extras/winder.py" || echo "❌ MISSING ext
 test -f kinematics/winder.py && echo "✅ kinematics/winder.py" || echo "❌ MISSING kinematics/winder.py"
 test -f .config.winder-minimal && echo "✅ .config.winder-minimal" || echo "❌ MISSING .config.winder-minimal"
 test -f install.sh && echo "✅ install.sh" || echo "❌ MISSING install.sh"
+test -f SETUP_CM4_COMPLETE.sh && echo "✅ SETUP_CM4_COMPLETE.sh" || echo "❌ MISSING SETUP_CM4_COMPLETE.sh"
 
 # Check Python syntax
 python3 -m py_compile extras/winder.py && echo "✅ winder.py syntax OK" || echo "❌ winder.py syntax ERROR"
@@ -21,6 +22,7 @@ python3 -m py_compile kinematics/winder.py && echo "✅ kinematics/winder.py syn
 
 # Check script syntax
 bash -n install.sh && echo "✅ install.sh syntax OK" || echo "❌ install.sh syntax ERROR"
+bash -n SETUP_CM4_COMPLETE.sh && echo "✅ SETUP_CM4_COMPLETE.sh syntax OK" || echo "❌ SETUP_CM4_COMPLETE.sh syntax ERROR"
 ```
 
 ## File Structure

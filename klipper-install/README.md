@@ -25,9 +25,39 @@ klipper-install/
 └── README.md                  # This file
 ```
 
+## Remote Development
+
+**Most development happens on CM4 via SSH.** See `REMOTE_DEVELOPMENT.md` for complete guide.
+
+**Quick start:**
+```bash
+# Sync files to CM4
+./scripts/sync_winder_module.sh
+
+# Run tests remotely
+./scripts/remote_test.sh
+
+# Watch logs
+./scripts/remote_logs.sh
+```
+
 ## Quick Install
 
-### Method 1: Use Install Script
+### Method 1: Use Install Script (Recommended)
+
+```bash
+cd klipper-install
+
+# Development environment (recommended)
+./install.sh --dev --mcu=AUTO
+
+# Or minimal production install
+./install.sh --mcu=AUTO
+```
+
+See `USAGE.md` for complete usage guide and all options.
+
+### Method 2: Manual Install
 
 ```bash
 # From project root

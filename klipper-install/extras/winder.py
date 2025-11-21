@@ -454,12 +454,13 @@ class WinderController:
         current_angle_rad = clamped_value * 2.0 * math.pi
         current_angle_deg = current_angle_rad * 180.0 / math.pi
         
-        # Debug: Log raw ADC value less frequently now that it's working
-        if not hasattr(self, '_adc_debug_count'):
-            self._adc_debug_count = 0
-        self._adc_debug_count += 1
-        # Log every 50 readings = 500ms (less spam now that it's working)
-        if self._adc_debug_count % 50 == 0:
+        # Debug: Log raw ADC value DISABLED (was spamming logs)
+        # Uncomment below to enable debug logging every 10 seconds:
+        # if not hasattr(self, '_adc_debug_count'):
+        #     self._adc_debug_count = 0
+        # self._adc_debug_count += 1
+        # if self._adc_debug_count % 1000 == 0:  # Log every 1000 readings = 10 seconds
+        if False:  # Disabled
             reactor = self.printer.get_reactor()
             cal_status = ""
             if self._angle_calibration_complete:
@@ -515,17 +516,22 @@ class WinderController:
                     is_actually_still = True
             
             if is_actually_still:
-                # Sensor is actually still (not rotating) - log debug info
-                reactor = self.printer.get_reactor()
-                hall_info = ""
-                if is_currently_saturated:
-                    hall_info = " (saturated, Hall delta=%d)" % hall_count_delta
-                reactor.register_async_callback(
-                    lambda et, hinfo=hall_info: logging.warning(
-                        "Winder: Angle sensor NOT changing! ADC: %.4f->%.4f (diff=%.4f), Angle: %.2f°->%.2f° (diff=%.4f rad = %.2f°)%s" 
-                        % (first_adc_raw, last_adc_raw, last_adc_raw - first_adc_raw,
-                           first_angle * 180.0 / math.pi, last_angle * 180.0 / math.pi, 
-                           angle_diff_rad_raw, angle_diff_rad_raw * 180.0 / math.pi, hinfo)))
+                # Sensor still logging DISABLED (was spamming logs)
+                # Uncomment below to enable:
+                # if not hasattr(self, '_still_log_count'):
+                #     self._still_log_count = 0
+                # self._still_log_count += 1
+                # if self._still_log_count % 100 == 0:  # Log every 100 times = 10 seconds when still
+                #     reactor = self.printer.get_reactor()
+                #     hall_info = ""
+                #     if is_currently_saturated:
+                #         hall_info = " (saturated, Hall delta=%d)" % hall_count_delta
+                #     reactor.register_async_callback(
+                #         lambda et, hinfo=hall_info: logging.debug(
+                #             "Winder: Angle sensor still - ADC: %.4f->%.4f, Angle: %.2f°->%.2f°%s" 
+                #             % (first_adc_raw, last_adc_raw,
+                #                first_angle * 180.0 / math.pi, last_angle * 180.0 / math.pi, hinfo)))
+                pass  # Logging disabled
             
             # Calculate time difference over the buffer period
             time_diff = last_time - first_time
@@ -623,13 +629,18 @@ class WinderController:
                 # But _update_rpm_safe will blend with Hall sensor for final value
                 self.spindle_measured_rpm = self._angle_smoothed_rpm
                 
-                # Log asynchronously every 100ms (when buffer is processed)
-                reactor = self.printer.get_reactor()
-                current_angle_deg = last_angle * 180.0 / math.pi
-                reactor.register_async_callback(
-                    lambda et: logging.info(
-                        "Winder: Angle sensor - angle=%.2f°, RPM=%.1f, revs=%d" 
-                        % (current_angle_deg, self.spindle_measured_rpm, self.angle_revolutions)))
+                # Angle sensor logging DISABLED (was spamming logs)
+                # Uncomment below to enable logging every 10 seconds:
+                # if not hasattr(self, '_angle_log_count'):
+                #     self._angle_log_count = 0
+                # self._angle_log_count += 1
+                # if self._angle_log_count % 100 == 0:  # Log every 100 buffers = 10 seconds
+                #     reactor = self.printer.get_reactor()
+                #     current_angle_deg = last_angle * 180.0 / math.pi
+                #     reactor.register_async_callback(
+                #         lambda et: logging.info(
+                #             "Winder: Angle sensor - angle=%.2f°, RPM=%.1f, revs=%d" 
+                #             % (current_angle_deg, self.spindle_measured_rpm, self.angle_revolutions)))
             
             # Clear buffer for next 100ms period
             self.angle_buffer = []
