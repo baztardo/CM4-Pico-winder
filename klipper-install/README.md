@@ -1,184 +1,247 @@
-# Klipper Install - Custom Files Package
+# CNC Automated Guitar Pickup Winder
 
-This folder contains all custom files that need to be added to a Klipper installation. These files are **NOT** in the master Klipper repository.
+Automated CNC guitar pickup winder using Klipper firmware on Manta M4P control board with CM4 host.
 
-## Structure
+## Project Overview
 
-```
-klipper-install/
-├── extras/                    # Python modules → klippy/extras/
-│   └── winder.py             # REQUIRED: Winder controller module
-├── kinematics/                # Python modules → klippy/kinematics/
-│   └── winder.py             # REQUIRED: Winder kinematics module
-├── scripts/                   # Helper scripts → scripts/
-│   ├── klipper_interface.py  # Python interface to Klipper API
-│   ├── winder_control.py     # Winder control interface
-│   └── ...                   # Other helper scripts
-├── config/                    # Configuration files → ~/printer.cfg
-│   ├── generic-bigtreetech-manta-m8p-V1_1.cfg  # Full MP8 config
-│   └── ...                   # Other config files
-├── docs/                      # Documentation (optional)
-│   └── ...                   # PDFs, images, guides
-├── mp8-boot/                  # Bootloader files (optional)
-│   └── M8P_bootloader.bin    # MP8 bootloader
-├── .config.winder-minimal     # Build config → .config
-└── README.md                  # This file
-```
+This project implements a complete automated winding system for guitar pickup coils, supporting various bobbin types (single coil, humbucker, P90, Rail, Custom) with turn counts ranging from 2,500 to 10,000 turns.
 
-## Remote Development
+### Key Features
 
-**Most development happens on CM4 via SSH.** See `REMOTE_DEVELOPMENT.md` for complete guide.
+- **BLDC Motor Control:** Variable speed control with PWM, direction, and brake
+- **Precise RPM Tracking:** Dual sensor system (Hall + Angle) for accurate RPM measurement
+- **Traverse Sync:** Real-time synchronization of traverse speed to spindle RPM
+- **Turn Counting:** Accurate turn counting using Hall sensor (1 pulse = 1 revolution)
+- **Wire Layering:** Automated bidirectional wire layering on bobbin
+- **Modular Architecture:** Clean, maintainable code structure
 
-**Quick start:**
-```bash
-# Sync files to CM4
-./scripts/sync_winder_module.sh
+## Quick Start
 
-# Run tests remotely
-./scripts/remote_test.sh
-
-# Watch logs
-./scripts/remote_logs.sh
-```
-
-## Quick Install
-
-### Method 1: Use Install Script (Recommended)
+### Installation
 
 ```bash
+# On CM4
+cd ~
+git clone <repo-url> klipper-install
 cd klipper-install
-
-# Development environment (recommended)
-./install.sh --dev --mcu=AUTO
-
-# Or minimal production install
-./install.sh --mcu=AUTO
+./SETUP_CM4_COMPLETE.sh --mcu=auto
 ```
 
-See `USAGE.md` for complete usage guide and all options.
+### Configuration
 
-### Method 2: Manual Install
-
+Copy the example config:
 ```bash
-# From project root
-./scripts/add_custom_files_to_klipper.sh ~/klipper
+cp config/printer-manta-m4p-winder.cfg ~/printer.cfg
 ```
 
-### Method 2: Manual Copy
+Edit `printer.cfg` with your specific hardware settings.
 
+### Basic Usage
+
+```gcode
+# Home traverse
+G28 Y
+
+# Start winding
+WINDER_START RPM=1000 LAYERS=5
+
+# Query status
+QUERY_WINDER
+
+# Stop winding
+WINDER_STOP
+```
+
+## Hardware
+
+- **Control Board:** Manta M4P (STM32G0B0RE MCU)
+- **Host:** CM4 (Compute Module 4)
+- **BLDC Motor:** Nema 17, 3-phase 24V, 8 poles
+- **Gear Ratio:** 40:60 (motor:spindle) = 0.667
+- **Hall Sensor:** NPN NO, 1 pulse/revolution
+- **Angle Sensor:** P3022-V1-CW360, 0-5V analog, 12-bit
+- **Traverse:** Nema 11 stepper, TMC2209 driver
+- **Wire:** 43 AWG copper (0.056mm diameter)
+
+See [HARDWARE_SPECIFICATIONS.md](docs/HARDWARE_SPECIFICATIONS.md) for complete details.
+
+## Software Architecture
+
+### Module Structure
+
+```
+klippy/
+├── kinematics/
+│   └── winder.py              # Movement/homing
+│
+└── extras/
+    ├── bldc_motor.py          # BLDC motor control
+    ├── angle_sensor.py         # ADC angle sensor
+    ├── spindle_hall.py         # Hall sensor RPM
+    ├── traverse.py             # Traverse control
+    └── winder_control.py      # Main coordinator
+```
+
+### Module Responsibilities
+
+- **`bldc_motor.py`** - Motor speed, direction, brake, power control
+- **`angle_sensor.py`** - Angle position tracking, saturation handling
+- **`spindle_hall.py`** - RPM measurement, turn counting
+- **`traverse.py`** - Traverse stepper coordination
+- **`winder_control.py`** - Coordinates all modules, high-level operations
+
+See [MODULAR_ARCHITECTURE_SUMMARY.md](docs/MODULAR_ARCHITECTURE_SUMMARY.md) for details.
+
+## Documentation
+
+### Project Documentation
+- **[PROJECT_SCOPE.md](docs/PROJECT_SCOPE.md)** - Complete project scope and requirements
+- **[HARDWARE_SPECIFICATIONS.md](docs/HARDWARE_SPECIFICATIONS.md)** - Detailed hardware specs
+- **[WINDING_PROCEDURE.md](docs/WINDING_PROCEDURE.md)** - Winding procedure implementation
+
+### Architecture Documentation
+- **[MODULAR_ARCHITECTURE_SUMMARY.md](docs/MODULAR_ARCHITECTURE_SUMMARY.md)** - Module architecture overview
+- **[WINDER_ARCHITECTURE_PROPOSAL.md](docs/WINDER_ARCHITECTURE_PROPOSAL.md)** - Architecture design decisions
+- **[KLIPPER_CONFIG_SYSTEM.md](docs/KLIPPER_CONFIG_SYSTEM.md)** - How Klipper config system works
+
+### Module Documentation
+- **[BLDC_MOTOR_MODULE.md](docs/BLDC_MOTOR_MODULE.md)** - BLDC motor module guide
+- **[CREATING_CUSTOM_MODULES.md](docs/CREATING_CUSTOM_MODULES.md)** - How to create custom modules
+- **[MODULE_QUICK_REFERENCE.md](docs/MODULE_QUICK_REFERENCE.md)** - Quick reference for module development
+
+### Installation Documentation
+- **[QUICK_START.md](dev/QUICK_START.md)** - Quick start guide
+- **[INSTALL_GUIDE.md](dev/INSTALL_GUIDE.md)** - Detailed installation guide
+- **[DEVELOPMENT.md](dev/DEVELOPMENT.md)** - Development setup
+
+## Configuration Files
+
+### Example Configs
+- **`config/printer-manta-m4p-winder.cfg`** - Complete M4P winder configuration
+- **`config/bldc_motor_example.cfg`** - BLDC motor configuration example
+
+### Pin Assignments (M4P)
+
+#### BLDC Motor (E0 Header)
+- PWM: PB3 (E0 STEP)
+- DIR: PB4 (E0 DIR)
+- Brake: PD5 (E0 ENA)
+- Power: PB7 (Bed heater port)
+
+#### Sensors
+- Angle Sensor: PA1 (BLTouch SERVOS port)
+- Hall Sensor: PC15 (Spindle Hall - M4P pin)
+
+#### Traverse (Y-Axis)
+- Step: PF12
+- Dir: PF11
+- Enable: PB3 (inverted)
+- Endstop: PF3
+- TMC2209 UART: PF13
+
+## G-code Commands
+
+### Winder Control
+- `WINDER_START RPM=<rpm> LAYERS=<layers> DIRECTION=<forward|reverse>`
+- `WINDER_STOP`
+- `WINDER_SET_RPM RPM=<rpm>`
+- `QUERY_WINDER`
+
+### BLDC Motor
+- `BLDC_START RPM=<rpm> DIRECTION=<forward|reverse>`
+- `BLDC_STOP`
+- `BLDC_SET_RPM RPM=<rpm>`
+- `BLDC_SET_DIR DIRECTION=<forward|reverse>`
+- `BLDC_SET_BRAKE ENGAGE=<0|1>`
+- `QUERY_BLDC`
+
+### Sensors
+- `QUERY_ANGLE_SENSOR`
+- `ANGLE_SENSOR_CALIBRATE ACTION=<RESET|MANUAL> MIN=<min> MAX=<max>`
+- `QUERY_SPINDLE_HALL`
+
+### Traverse
+- `TRAVERSE_MOVE POSITION=<pos> SPEED=<speed>`
+- `TRAVERSE_HOME`
+- `QUERY_TRAVERSE`
+
+## Winding Process
+
+### Supported Bobbin Types
+- Single coil
+- Humbucker
+- P90
+- Rail
+- Custom
+
+### Turn Count Range
+- **Range:** 2,500 to 10,000 turns
+- **Typical:**
+  - Single coil: 5,000-8,000
+  - Humbucker: 5,000-7,000 per coil
+  - P90: 10,000+
+
+### Winding Procedure
+
+1. **Setup:** Select bobbin type, wire gauge, turn count
+2. **Homing:** Home traverse, move to start position
+3. **Winding:** Start spindle, sync traverse, count turns
+4. **Completion:** Stop motor, disable steppers, display info
+
+See [WINDING_PROCEDURE.md](docs/WINDING_PROCEDURE.md) for implementation details.
+
+## Development
+
+### Module Development
+See [CREATING_CUSTOM_MODULES.md](docs/CREATING_CUSTOM_MODULES.md) for how to create custom modules.
+
+### Testing
 ```bash
-# Required files
-cp extras/winder.py ~/klipper/klippy/extras/
-cp kinematics/winder.py ~/klipper/klippy/kinematics/
+# Test individual modules
+python3 ~/klipper/scripts/klipper_interface.py -g "QUERY_BLDC"
+python3 ~/klipper/scripts/klipper_interface.py -g "QUERY_ANGLE_SENSOR"
+python3 ~/klipper/scripts/klipper_interface.py -g "QUERY_SPINDLE_HALL"
 
-# Build config (recommended)
-cp .config.winder-minimal ~/klipper/.config
-
-# Optional: Scripts
-cp scripts/*.py ~/klipper/scripts/
-
-# Optional: Config (copy to ~/printer.cfg on CM4)
-cp config/generic-bigtreetech-manta-m8p-V1_1.cfg ~/printer.cfg
+# Test coordinator
+python3 ~/klipper/scripts/klipper_interface.py -g "QUERY_WINDER"
 ```
 
-## Required Files
-
-These files **MUST** be copied for the winder to work:
-
-1. **`extras/winder.py`** → `~/klipper/klippy/extras/winder.py`
-   - Winder controller module
-   - Handles motor control, Hall sensors, RPM measurement
-
-2. **`kinematics/winder.py`** → `~/klipper/klippy/kinematics/winder.py`
-   - Winder kinematics module
-   - Only uses Y-axis (traverse stepper)
-
-## Recommended Files
-
-1. **`.config.winder-minimal`** → `~/klipper/.config`
-   - Minimal build configuration
-   - Disables unused features (LCD, neopixel, etc.)
-
-2. **`config/generic-bigtreetech-manta-m8p-V1_1.cfg`** → `~/printer.cfg`
-   - Full MP8 configuration
-   - Includes winder module, stepper, TMC2209 settings
-
-## Optional Files
-
-- **Scripts** - Helper scripts for testing and debugging
-- **Docs** - Documentation and schematics
-- **Bootloader** - MP8 bootloader binary
-
-## Installation Steps
-
-1. **Clone Klipper:**
-   ```bash
-   cd ~
-   git clone https://github.com/Klipper3d/klipper.git
-   ```
-
-2. **Copy custom files:**
-   ```bash
-   cd ~/klipper-install
-   cp extras/winder.py ~/klipper/klippy/extras/
-   cp kinematics/winder.py ~/klipper/klippy/kinematics/
-   cp .config.winder-minimal ~/klipper/.config
-   ```
-
-3. **Build firmware:**
-   ```bash
-   cd ~/klipper
-   make menuconfig  # Or use .config.winder-minimal
-   make
-   ```
-
-4. **Copy config to CM4:**
-   ```bash
-   scp config/generic-bigtreetech-manta-m8p-V1_1.cfg winder@winder.local:~/printer.cfg
-   ```
-
-## File Locations
-
-| Source | Destination | Required? |
-|--------|-------------|-----------|
-| `extras/winder.py` | `~/klipper/klippy/extras/winder.py` | ✅ Yes |
-| `kinematics/winder.py` | `~/klipper/klippy/kinematics/winder.py` | ✅ Yes |
-| `.config.winder-minimal` | `~/klipper/.config` | ⚠️ Recommended |
-| `config/*.cfg` | `~/printer.cfg` | ⚪ User config |
-| `scripts/*.py` | `~/klipper/scripts/` | ⚪ Optional |
-
-## Verification
-
-After copying files, verify they exist:
-
+### File Sync
 ```bash
-# Check required files
-ls -la ~/klipper/klippy/extras/winder.py
-ls -la ~/klipper/klippy/kinematics/winder.py
+# Sync to CM4
+./scripts/sync_cm4_files.sh winder@winder.local push
 
-# Test import (should not error)
-cd ~/klipper
-python3 -c "import sys; sys.path.insert(0, 'klippy'); from extras import winder; print('OK')"
+# Sync from CM4
+./scripts/sync_cm4_files.sh winder@winder.local pull
 ```
 
-## Notes
+## Status
 
-- **Config files** are user-specific and should be copied to `~/printer.cfg` on your CM4
-- **Build config** (`.config.winder-minimal`) goes in the Klipper root directory
-- **Python modules** go in their respective `klippy/` subdirectories
-- **Scripts** are optional but useful for testing and debugging
+### ✅ Completed
+- Modular architecture
+- BLDC motor control
+- Angle sensor handling
+- Hall sensor handling
+- Traverse control
+- Winder coordinator
 
-## Troubleshooting
+### ⏳ In Progress
+- G-code parsing for winding process
+- Turn counting implementation
+- Traverse sync algorithm
+- Wire layering algorithm
 
-**Import errors:**
-- Make sure files are in correct locations
-- Check file permissions: `chmod +x scripts/*.py`
+### 🔮 Future
+- GUI integration (5" touch screen)
+- Load sensor integration
+- Advanced layering patterns
 
-**Build errors:**
-- Verify `.config` file exists: `ls -la ~/klipper/.config`
-- Check MCU selection in config matches your board
+## License
 
-**Config errors:**
-- Update serial port in `printer.cfg`: `ls -la /dev/serial/by-id/`
-- Verify winder module is loaded: Check Klipper logs
+This project uses Klipper firmware, licensed under GPLv3.
 
+## References
+
+- [Klipper Documentation](https://www.klipper3d.org/)
+- [Manta M4P Manual](docs/BIGTREETECH_MANTA_M4P_User_Manual-2.pdf)
+- [Manta M4P Schematic](docs/BIGTREETECH_Manta_M4P_V2.1_220608%20PINOUT.pdf)

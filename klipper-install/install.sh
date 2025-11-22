@@ -190,6 +190,7 @@ clone_klipper() {
         echo "  → Patching Kconfig and Makefile for conditional sourcing..."
         "$INSTALL_DIR/scripts/patch_kconfig_conditional.sh" "$KLIPPER_DIR" || true
         "$INSTALL_DIR/scripts/patch_makefile_conditional.sh" "$KLIPPER_DIR" || true
+        "$INSTALL_DIR/scripts/patch_kin_winder.sh" "$KLIPPER_DIR" || true
     fi
     
     # Keep temp clone for development/debugging (can be cleaned up later)

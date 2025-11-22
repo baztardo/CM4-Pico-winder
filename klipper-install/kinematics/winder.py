@@ -12,7 +12,7 @@ class WinderKinematics:
         self.printer = config.get_printer()
         # Only Y-axis (traverse) stepper
         self.rail = stepper.LookupMultiRail(config.getsection('stepper_y'))
-        self.rail.setup_itersolve('cartesian_stepper_alloc', b'y')
+        self.rail.setup_itersolve('winder_stepper_alloc', b'y')
         self.rail.set_trapq(toolhead.get_trapq())
         
         # Get position range

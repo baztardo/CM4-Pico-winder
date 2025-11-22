@@ -74,7 +74,7 @@ angle_auto_calibrate: True
 
 # Spindle Hall Sensor
 [spindle_hall]
-hall_pin: PF6
+hall_pin: PC15    # M4P pin (PF6 was MP8)
 pulses_per_revolution: 1
 sample_time: 0.01
 poll_time: 0.1
@@ -133,8 +133,8 @@ min_spindle_rpm: 10.0
 [winder]
 motor_pwm_pin: PC9
 motor_dir_pin: PB4
-spindle_hall_pin: PF6
-angle_sensor_pin: PA0
+spindle_hall_pin: PC15  # M4P pin (PF6 was MP8)
+angle_sensor_pin: PA1
 # ... everything mixed together
 ```
 
@@ -146,11 +146,11 @@ dir_pin: PB4
 ...
 
 [angle_sensor]
-sensor_pin: PA0
+sensor_pin: PA1
 ...
 
 [spindle_hall]
-hall_pin: PF6
+hall_pin: PC15  # M4P pin
 ...
 
 [traverse]
