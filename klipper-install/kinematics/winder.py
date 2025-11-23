@@ -12,7 +12,7 @@ class WinderKinematics:
         self.printer = config.get_printer()
         # Only Y-axis (traverse) stepper
         self.rail = stepper.LookupMultiRail(config.getsection('stepper_y'))
-        self.rail.setup_itersolve('winder_stepper_alloc', b'y')
+        self.rail.setup_itersolve('cartesian_stepper_alloc', b'y')
         self.rail.set_trapq(toolhead.get_trapq())
         
         # Get position range
@@ -24,6 +24,8 @@ class WinderKinematics:
         self.limits = [(1.0, -1.0), (1.0, -1.0), (1.0, -1.0)]  # X, Y, Z
         # Set initial position (limits are invalid until homed - this is expected)
         self.rail.set_position([0., 0., 0.])
+        
+        # Use standard Klipper behavior: F parameter = mm/min (don't override speed_factor)
         
     def get_steppers(self):
         return list(self.rail.get_steppers())

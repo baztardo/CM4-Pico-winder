@@ -16,44 +16,24 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 echo -e "${BLUE}Step 1: Check current position before homing...${NC}"
-BEFORE_POS=$(python3 "$KLIPPER_INTERFACE" --query toolhead 2>/dev/null | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    if 'result' in data and 'status' in data['result']:
-        toolhead = data['result']['status'].get('toolhead', {})
-        pos = toolhead.get('position', [0,0,0,0])
-        print(f\"Y position: {pos[1]:.2f}mm\")
-except:
-    print('Could not parse position')
-" 2>/dev/null || echo "Unknown")
+BEFORE_POS=$(python3 "$KLIPPER_INTERFACE" --query toolhead 2>/dev/null | python3 -c 'import sys, json; try: data = json.load(sys.stdin); toolhead = data.get("result", {}).get("status", {}).get("toolhead", {}); pos = toolhead.get("position", [0,0,0,0]); print(f"Y: {pos[1]:.2f}mm"); except: print("Could not parse position")' 2>/dev/null || echo "Unknown")
 echo "  Position before: $BEFORE_POS"
 echo ""
 
-echo -e "${BLUE}Step 2: Force stepper to far position (93mm)...${NC}"
+echo -e "${BLUE}Step 2: Force stepper to far position (82mm)...${NC}"
 echo "  This ensures stepper starts from max position before homing"
 python3 "$KLIPPER_INTERFACE" -g "G90" > /dev/null 2>&1
-python3 "$KLIPPER_INTERFACE" -g "G1 Y93 F1000" > /dev/null 2>&1
+python3 "$KLIPPER_INTERFACE" -g "G1 Y82 F1000" > /dev/null 2>&1
 sleep 2
-echo "  ✓ Moved to Y93"
+echo "  ✓ Moved to Y82"
 echo ""
 
 echo -e "${BLUE}Step 3: Check position after move...${NC}"
-AFTER_MOVE=$(python3 "$KLIPPER_INTERFACE" --query toolhead 2>/dev/null | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    if 'result' in data and 'status' in data['result']:
-        toolhead = data['result']['status'].get('toolhead', {})
-        pos = toolhead.get('position', [0,0,0,0])
-        print(f\"Y position: {pos[1]:.2f}mm\")
-except:
-    print('Could not parse position')
-" 2>/dev/null || echo "Unknown")
+AFTER_MOVE=$(python3 "$KLIPPER_INTERFACE" --query toolhead 2>/dev/null | python3 -c 'import sys, json; try: data = json.load(sys.stdin); toolhead = data.get("result", {}).get("status", {}).get("toolhead", {}); pos = toolhead.get("position", [0,0,0,0]); print(f"Y: {pos[1]:.2f}mm"); except: print("Could not parse position")' 2>/dev/null || echo "Unknown")
 echo "  Position after move: $AFTER_MOVE"
 echo ""
 
-echo -e "${BLUE}Step 4: Now try homing (should move ~93mm toward switch)...${NC}"
+echo -e "${BLUE}Step 4: Now try homing (should move ~82mm toward switch)...${NC}"
 echo "  👀 WATCH THE MOTOR - measure how far it moves!"
 read -p "  Press Enter to start homing..."
 python3 "$KLIPPER_INTERFACE" -g "G28 Y"
@@ -61,17 +41,7 @@ echo ""
 
 echo -e "${BLUE}Step 5: Check position after homing...${NC}"
 sleep 1
-AFTER_HOME=$(python3 "$KLIPPER_INTERFACE" --query toolhead 2>/dev/null | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    if 'result' in data and 'status' in data['result']:
-        toolhead = data['result']['status'].get('toolhead', {})
-        pos = toolhead.get('position', [0,0,0,0])
-        print(f\"Y position: {pos[1]:.2f}mm\")
-except:
-    print('Could not parse position')
-" 2>/dev/null || echo "Unknown")
+AFTER_HOME=$(python3 "$KLIPPER_INTERFACE" --query toolhead 2>/dev/null | python3 -c 'import sys, json; try: data = json.load(sys.stdin); toolhead = data.get("result", {}).get("status", {}).get("toolhead", {}); pos = toolhead.get("position", [0,0,0,0]); print(f"Y: {pos[1]:.2f}mm"); except: print("Could not parse position")' 2>/dev/null || echo "Unknown")
 echo "  Position after homing: $AFTER_HOME"
 echo ""
 
@@ -82,8 +52,8 @@ echo "    - Stepper may be starting from wrong position"
 echo "    - Check if endstop is triggering early (false trigger)"
 echo "    - Check endstop wiring/pin"
 echo ""
-echo "  If motor moved ~93mm but didn't hit switch:"
-echo "    - Switch may be further than 93mm from start"
+echo "  If motor moved ~82mm but didn't hit switch:"
+echo "    - Switch may be further than 82mm from start"
 echo "    - Increase position_max in config"
 echo ""
 echo "  If motor moved correct distance and hit switch:"

@@ -27,7 +27,6 @@ class Traverse:
         
         # Register event handlers
         self.printer.register_event_handler("klippy:connect", self.handle_connect)
-        self.printer.register_event_handler("homing:home_rails_end", self.handle_home_end)
         
         # Register G-code commands
         gcode = self.printer.lookup_object('gcode')
@@ -40,30 +39,30 @@ class Traverse:
     
     def handle_connect(self):
         """Setup traverse stepper when MCU connects"""
-        # Lookup stepper
-        try:
-            self.stepper = self.printer.lookup_object(self.stepper_name)
-        except Exception:
-            logging.error("Traverse: Could not find stepper '%s'" % self.stepper_name)
-            return
-        
         # Get toolhead
         self.toolhead = self.printer.lookup_object('toolhead')
         
         logging.info("Traverse '%s' initialized - stepper: %s, max: %.2fmm" %
                     (self.name, self.stepper_name, self.max_position))
     
-    def handle_home_end(self, homing_state, rails):
-        """Called when homing completes"""
-        # Check if our stepper was homed
-        for rail in rails:
-            for stepper in rail.get_steppers():
-                if stepper.get_name() == self.stepper_name:
-                    self.is_homed = True
-                    self.current_position = self.toolhead.get_position()[1]  # Y position
-                    logging.info("Traverse '%s' homed at position %.2fmm" %
-                               (self.name, self.current_position))
-                    return
+    def check_homed(self):
+        """Check if Y axis is homed using kinematics status"""
+        if not self.toolhead:
+            return False
+        
+        kin = self.toolhead.get_kinematics()
+        try:
+            status = kin.get_status(self.printer.get_reactor().monotonic())
+            homed_axes = status.get('homed_axes', '')
+            is_homed = 'y' in homed_axes
+            if is_homed != self.is_homed:
+                self.is_homed = is_homed
+                if is_homed:
+                    logging.info("Traverse '%s' detected homed" % self.name)
+            return is_homed
+        except Exception as e:
+            logging.warning("Traverse: Error checking homed status: %s" % e)
+            return False
     
     def home(self):
         """Home the traverse"""
@@ -81,23 +80,16 @@ class Traverse:
             logging.error("Traverse: Toolhead not available")
             return False
         
-        if not self.is_homed:
+        # Check if homed
+        if not self.check_homed():
             logging.error("Traverse: Must home first (G28 Y)")
             return False
         
         # Clamp position
         position = max(0.0, min(position, self.max_position))
         
-        # Get current position
-        current_pos = self.toolhead.get_position()
-        
-        # Move Y axis
-        gcode = self.printer.lookup_object('gcode')
-        if speed:
-            gcode.run_script_from_command("G1 Y%.3f F%.1f" % (position, speed))
-        else:
-            gcode.run_script_from_command("G1 Y%.3f" % position)
-        
+        # Use manual_move for better performance
+        self.toolhead.manual_move([None, position, None, None], speed or self.toolhead.max_velocity)
         self.current_position = position
         return True
     

@@ -223,13 +223,20 @@ class WinderControl:
             # Start traverse motion after motor has started
             def start_traverse_callback(eventtime):
                 try:
-                    if self.traverse.is_homed:
+                    # Check if homed
+                    is_homed = self.traverse.check_homed() if hasattr(self.traverse, 'check_homed') else self.traverse.is_homed
+                    
+                    if is_homed:
                         # Start layer winding
+                        logging.info("WinderControl: Starting traverse motion - start=%.2f, end=%.2f, speed=%.3f mm/s" %
+                                    (start_y, end_y, traverse_speed))
                         self._start_winding_layer(start_y, end_y, traverse_speed, layers)
                     else:
-                        logging.warning("WinderControl: Traverse not homed - motor running but traverse motion skipped")
+                        logging.warning("WinderControl: Traverse not homed - motor running but traverse motion skipped. Run G28 Y first.")
                 except Exception as e:
                     logging.error("WinderControl: Error starting traverse: %s" % e)
+                    import traceback
+                    logging.error("WinderControl: Traceback: %s" % traceback.format_exc())
             
             reactor.register_callback(start_traverse_callback, reactor.monotonic() + 1.2)
         
@@ -237,16 +244,35 @@ class WinderControl:
                     (spindle_rpm, motor_rpm, traverse_speed, layers))
     
     def _start_winding_layer(self, start_y, end_y, traverse_speed, layers):
-        """Start winding layer motion"""
+        """Start winding layer motion with proper back-and-forth"""
         toolhead = self.printer.lookup_object('toolhead')
         
-        for layer in range(layers):
-            # Move forward
-            toolhead.manual_move([None, end_y, None, None], traverse_speed)
-            # Move backward
-            toolhead.manual_move([None, start_y, None, None], traverse_speed)
+        # Set max velocity for sync algorithm
+        toolhead.set_max_velocities(traverse_speed * 1.1, None, None, None)
         
-        self.current_layer = layers
+        for layer in range(layers):
+            if not self.is_winding:
+                break
+            
+            # Move forward (start → end)
+            toolhead.manual_move([None, end_y, None, None], traverse_speed)
+            toolhead.wait_moves()
+            
+            if not self.is_winding:
+                break
+            
+            # Move backward (end → start)
+            toolhead.manual_move([None, start_y, None, None], traverse_speed)
+            toolhead.wait_moves()
+            
+            self.current_layer = layer + 1
+            logging.info("WinderControl: Completed layer %d of %d (RPM: %.1f, Speed: %.3f mm/s)" %
+                        (self.current_layer, layers, self.get_spindle_rpm(), traverse_speed))
+        
+        # Stop winding when layers complete
+        if self.is_winding:
+            self.stop_winding()
+            logging.info("WinderControl: Winding complete - %d layers finished" % layers)
     
     def stop_winding(self):
         """Stop winding operation"""

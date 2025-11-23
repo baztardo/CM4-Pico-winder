@@ -48,6 +48,7 @@ class BLDCMotor:
         
         # Register event handlers
         self.printer.register_event_handler("klippy:connect", self.handle_connect)
+        self.printer.register_event_handler("klippy:ready", self.handle_ready)
         self.printer.register_event_handler("klippy:shutdown", self.handle_shutdown)
         
         # Register G-code commands
@@ -70,38 +71,45 @@ class BLDCMotor:
     def handle_connect(self):
         """Setup hardware pins when MCU connects"""
         ppins = self.printer.lookup_object('pins')
-        toolhead = self.printer.lookup_object('toolhead')
         
-        # Setup PWM pin
+        # Setup PWM pin with start value = 0 (motor off)
         self.mcu_pwm = ppins.setup_pin('pwm', self.pwm_pin_name)
         self.mcu_pwm.setup_max_duration(0)
         self.mcu_pwm.setup_cycle_time(1.0 / self.pwm_frequency)
+        self.mcu_pwm.setup_start_value(0.0, 0.0)  # Start OFF, shutdown OFF
         
-        # Setup DIR pin
+        # Setup DIR pin with start value = HIGH (forward direction)
         self.mcu_dir = ppins.setup_pin('digital_out', self.dir_pin_name)
         self.mcu_dir.setup_max_duration(0)
+        dir_start = 0 if self.dir_inverted else 1  # Forward direction
+        self.mcu_dir.setup_start_value(dir_start, dir_start)
         
-        # Setup Brake pin (if configured)
+        # Setup Brake pin with start value = LOW (brake OFF)
         if self.brake_pin_name:
             self.mcu_brake = ppins.setup_pin('digital_out', self.brake_pin_name)
             self.mcu_brake.setup_max_duration(0)
-            # Initialize brake OFF
-            print_time = toolhead.get_last_move_time()
-            brake_value = 0 if not self.brake_inverted else 1
-            self.mcu_brake.set_digital(print_time, brake_value)
+            brake_start = 1 if self.brake_inverted else 0  # Brake OFF
+            self.mcu_brake.setup_start_value(brake_start, brake_start)
+            self.brake_engaged = False
         
-        # Setup Power pin (if configured)
+        # Setup Power pin with start value = LOW (power OFF)
         if self.power_pin_name:
             self.mcu_power = ppins.setup_pin('digital_out', self.power_pin_name)
             self.mcu_power.setup_max_duration(0)
-            # Initialize power OFF
-            print_time = toolhead.get_last_move_time()
-            self.mcu_power.set_digital(print_time, 0)
+            self.mcu_power.setup_start_value(0, 0)  # Power OFF
             self.power_on = False
         
         logging.info("BLDC Motor '%s' connected: PWM=%s, DIR=%s, Brake=%s, Power=%s" %
                      (self.name, self.pwm_pin_name, self.dir_pin_name,
                       self.brake_pin_name or "None", self.power_pin_name or "None"))
+    
+    def handle_ready(self):
+        """Initialize pin states when system is ready (after MCU setup complete)"""
+        # Don't initialize pin states here - just log ready
+        # Pins will be set to safe state when first commanded
+        self.brake_engaged = True  # Assume brake is engaged initially
+        self.power_on = False
+        logging.info("BLDC Motor '%s' ready (brake engaged, power off)" % self.name)
     
     def handle_shutdown(self):
         """Emergency stop on shutdown"""
@@ -176,7 +184,7 @@ class BLDCMotor:
         logging.info("BLDC Motor: Brake %s" % ("ENGAGED" if engage else "RELEASED"))
     
     def set_rpm(self, rpm):
-        """Set motor RPM
+        """Set motor RPM using lookahead callback for proper timing
         
         Args:
             rpm: Target RPM (0 to max_rpm)
@@ -204,58 +212,161 @@ class BLDCMotor:
         duty_cycle = max(self.min_pwm_duty, min(duty_cycle, 1.0))
         
         toolhead = self.printer.lookup_object('toolhead')
-        print_time = toolhead.get_last_move_time()
         
-        # Set PWM
-        self.mcu_pwm.set_pwm(print_time, duty_cycle)
-        self.current_rpm = rpm
-        self.is_running = True
+        # Use lookahead callback to ensure proper PWM timing
+        def set_pwm_callback(print_time):
+            try:
+                # Check if PWM pin is ready
+                if not hasattr(self.mcu_pwm, '_set_cmd') or self.mcu_pwm._set_cmd is None:
+                    logging.warning("BLDC Motor: PWM pin not ready - _set_cmd not configured")
+                    return
+                
+                # Ensure minimum spacing from last move
+                min_spacing = 0.1
+                base_time = max(print_time, toolhead.get_last_move_time() + min_spacing)
+                
+                # Set PWM with proper timing
+                self.mcu_pwm.set_pwm(base_time, duty_cycle)
+                self.current_rpm = rpm
+                self.is_running = True
+                
+                logging.info("BLDC Motor: RPM set to %.1f (duty: %.1f%%) at time %.3f" %
+                             (rpm, duty_cycle * 100.0, base_time))
+            except Exception as e:
+                logging.error("BLDC Motor: Error setting PWM: %s" % e)
+                import traceback
+                logging.error("BLDC Motor: Traceback: %s" % traceback.format_exc())
         
-        logging.info("BLDC Motor: RPM set to %.1f (duty: %.1f%%)" %
-                     (rpm, duty_cycle * 100.0))
+        toolhead.register_lookahead_callback(set_pwm_callback)
     
     def start_motor(self, rpm=None, forward=True):
-        """Start motor with specified RPM and direction
+        """Start motor with specified RPM and direction using proper timing
         
         Args:
             rpm: Target RPM (uses current target if None)
             forward: Direction (True=forward, False=reverse)
         """
-        # Ensure power is on
-        if self.mcu_power and not self.power_on:
-            self.set_power(True)
+        toolhead = self.printer.lookup_object('toolhead')
+        reactor = self.printer.get_reactor()
         
-        # Release brake
-        if self.mcu_brake and self.brake_engaged:
-            self.set_brake(False)
-        
-        # Set direction
-        self.set_direction(forward)
-        
-        # Set RPM
+        # Determine target RPM
         if rpm is not None:
-            self.set_rpm(rpm)
+            target_rpm = rpm
         elif self.target_rpm > 0:
-            self.set_rpm(self.target_rpm)
+            target_rpm = self.target_rpm
         else:
-            self.set_rpm(self.min_rpm)
+            target_rpm = self.min_rpm
+        
+        # Calculate PWM duty cycle
+        duty_cycle = target_rpm / self.max_rpm
+        duty_cycle = max(self.min_pwm_duty, min(duty_cycle, 1.0))
+        
+        # Use reactor callbacks with proper timing spacing
+        def set_power_callback(eventtime):
+            """Enable power first"""
+            try:
+                if self.mcu_power and not self.power_on:
+                    print_time = toolhead.mcu.estimated_print_time(eventtime) + 0.1
+                    self.mcu_power.set_digital(print_time, 1)
+                    self.power_on = True
+                    logging.info("BLDC Motor: Power ON")
+            except Exception as e:
+                logging.warning("BLDC Motor: Error setting power: %s" % e)
+        
+        def release_brake_callback(eventtime):
+            """Release brake second"""
+            try:
+                if self.mcu_brake and self.brake_engaged:
+                    print_time = toolhead.mcu.estimated_print_time(eventtime) + 0.1
+                    brake_value = 0 if not self.brake_inverted else 1
+                    self.mcu_brake.set_digital(print_time, brake_value)
+                    self.brake_engaged = False
+                    logging.info("BLDC Motor: Brake RELEASED")
+            except Exception as e:
+                logging.warning("BLDC Motor: Error releasing brake: %s" % e)
+        
+        def set_direction_callback(eventtime):
+            """Set direction third"""
+            try:
+                if self.mcu_dir:
+                    print_time = toolhead.mcu.estimated_print_time(eventtime) + 0.1
+                    self.direction_forward = forward
+                    if self.dir_inverted:
+                        dir_value = 1 if not forward else 0
+                    else:
+                        dir_value = 0 if not forward else 1
+                    self.mcu_dir.set_digital(print_time, dir_value)
+                    logging.info("BLDC Motor: Direction %s" % ("FORWARD" if forward else "REVERSE"))
+            except Exception as e:
+                logging.warning("BLDC Motor: Error setting direction: %s" % e)
+        
+        def set_pwm_callback(print_time):
+            """Set PWM last - this actually starts the motor"""
+            try:
+                if self.mcu_pwm is None:
+                    logging.error("BLDC Motor: PWM pin not configured")
+                    return
+                
+                # Check if PWM pin is ready
+                if not hasattr(self.mcu_pwm, '_set_cmd') or self.mcu_pwm._set_cmd is None:
+                    logging.error("BLDC Motor: PWM pin not ready - _set_cmd not configured")
+                    return
+                
+                # Ensure minimum spacing
+                min_spacing = 0.1
+                base_time = max(print_time, toolhead.get_last_move_time() + min_spacing)
+                
+                # Set PWM
+                self.mcu_pwm.set_pwm(base_time, duty_cycle)
+                self.current_rpm = target_rpm
+                self.target_rpm = target_rpm
+                self.is_running = True
+                
+                logging.info("BLDC Motor: Motor STARTED - RPM=%.1f, duty=%.1f%%" %
+                             (target_rpm, duty_cycle * 100.0))
+            except Exception as e:
+                logging.error("BLDC Motor: Error starting PWM: %s" % e)
+                import traceback
+                logging.error("BLDC Motor: Traceback: %s" % traceback.format_exc())
+        
+        # Schedule commands with proper delays: 0.1s, 0.3s, 0.5s
+        reactor.register_callback(set_power_callback, reactor.monotonic() + 0.1)
+        reactor.register_callback(release_brake_callback, reactor.monotonic() + 0.3)
+        reactor.register_callback(set_direction_callback, reactor.monotonic() + 0.5)
+        
+        # Use lookahead callback for PWM (most critical)
+        toolhead.register_lookahead_callback(set_pwm_callback)
     
     def stop_motor(self):
-        """Stop motor (set RPM to 0)"""
+        """Stop motor (set RPM to 0) using lookahead callback"""
         if self.mcu_pwm is None:
             return
         
         toolhead = self.printer.lookup_object('toolhead')
-        print_time = toolhead.get_last_move_time()
         
-        # Set PWM to 0
-        self.mcu_pwm.set_pwm(print_time, 0.0)
+        # Use lookahead callback for proper timing
+        def stop_pwm_callback(print_time):
+            try:
+                if not hasattr(self.mcu_pwm, '_set_cmd') or self.mcu_pwm._set_cmd is None:
+                    logging.warning("BLDC Motor: PWM pin not ready - cannot stop")
+                    return
+                
+                # Ensure minimum spacing
+                min_spacing = 0.1
+                base_time = max(print_time, toolhead.get_last_move_time() + min_spacing)
+                
+                # Set PWM to 0
+                self.mcu_pwm.set_pwm(base_time, 0.0)
+                
+                self.current_rpm = 0.0
+                self.target_rpm = 0.0
+                self.is_running = False
+                
+                logging.info("BLDC Motor: Stopped")
+            except Exception as e:
+                logging.error("BLDC Motor: Error stopping PWM: %s" % e)
         
-        self.current_rpm = 0.0
-        self.target_rpm = 0.0
-        self.is_running = False
-        
-        logging.info("BLDC Motor: Stopped")
+        toolhead.register_lookahead_callback(stop_pwm_callback)
     
     def get_status(self, eventtime):
         """Get motor status for API"""
