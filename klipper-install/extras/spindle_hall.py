@@ -30,99 +30,104 @@ class SpindleHall:
         # RPM smoothing
         self._smoothed_rpm = 0.0
         
+        # Create MCU counter EARLY (in __init__) so build_config runs during MCU config phase
+        # This ensures query_counter command with is_init=True gets sent properly
+        logging.info("Spindle Hall sensor '%s' creating counter on pin %s (sample=%.3fs, poll=%.3fs)" 
+                    % (self.name, self.hall_pin, self.sample_time, self.poll_time))
+        
+        mcu_counter = pulse_counter.MCU_counter(
+            self.printer,
+            self.hall_pin,
+            self.sample_time,
+            self.poll_time
+        )
+        def hall_callback(time, count, count_time):
+            """Callback to track Hall sensor pulses and calculate RPM"""
+            if not hasattr(hall_callback, '_last_count'):
+                hall_callback._last_count = 0
+                hall_callback._last_time = None
+                hall_callback._callback_num = 0
+            
+            hall_callback._callback_num += 1
+            
+            # DEBUG: Log EVERY callback for first 20
+            if hall_callback._callback_num <= 20:
+                logging.info("Spindle Hall callback #%d: time=%.3f, count=%d, count_time=%.3f" %
+                            (hall_callback._callback_num, time, count, count_time))
+            
+            # Update count
+            delta = count - hall_callback._last_count
+            self.hall_count = count
+            
+            # Calculate RPM from count changes
+            if delta > 0 and hall_callback._last_time is not None:
+                delta_time = count_time - hall_callback._last_time
+                if delta_time > 0:
+                    # Calculate frequency (edges per second)
+                    freq = delta / delta_time
+                    # Convert to RPM (pulses_per_revolution=1, 2 edges per pulse)
+                    edges_per_rev = 2 * self.pulses_per_revolution
+                    calculated_rpm = (freq / edges_per_rev) * 60.0
+                    
+                    # Smooth RPM
+                    alpha = 0.3
+                    if self._smoothed_rpm == 0:
+                        self._smoothed_rpm = calculated_rpm
+                    else:
+                        self._smoothed_rpm = alpha * calculated_rpm + (1.0 - alpha) * self._smoothed_rpm
+                    
+                    self.current_rpm = self._smoothed_rpm
+                    
+                    # Debug logging occasionally
+                    if hall_callback._callback_num % 50 == 0:
+                        logging.info("Spindle Hall: delta=%d, delta_time=%.3f, freq=%.2f Hz, RPM=%.1f" %
+                                    (delta, delta_time, freq, calculated_rpm))
+            
+            hall_callback._last_count = count
+            hall_callback._last_time = count_time
+        
+        mcu_counter.setup_callback(hall_callback)
+        self.freq_counter = mcu_counter
+        
+        logging.info("Spindle Hall sensor '%s' initialized on %s, counter OID=%d" 
+                    % (self.name, self.hall_pin, mcu_counter._oid))
+        
         # Register event handlers
-        self.printer.register_event_handler("klippy:connect", self.handle_connect)
+        self.printer.register_event_handler("klippy:ready", self.handle_ready)
         
         # Register G-code commands
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command("QUERY_SPINDLE_HALL", self.cmd_QUERY_SPINDLE_HALL,
                                desc=self.cmd_QUERY_SPINDLE_HALL_help)
     
-    def handle_connect(self):
-        """Setup Hall sensor when MCU connects"""
-        logging.info("Spindle Hall sensor '%s' creating counter on pin %s (sample=%.3fs, poll=%.3fs)" 
-                    % (self.name, self.hall_pin, self.sample_time, self.poll_time))
-        
-        # Create frequency counter
-        original_counter = pulse_counter.FrequencyCounter(
-            self.printer, 
-            self.hall_pin,
-            self.sample_time,
-            self.poll_time
-        )
-        
-        # Access underlying MCU counter to add callback
-        mcu_counter = original_counter._counter
-        original_callback = mcu_counter._callback
-        
-        def hall_callback(time, count, count_time):
-            """Callback to track Hall sensor pulses"""
-            if not hasattr(hall_callback, '_last_count'):
-                hall_callback._last_count = 0
-            
-            delta = count - hall_callback._last_count
-            self.hall_count = count
-            
-            # Update RPM when we see new edges
-            if delta > 0:
-                # Calculate RPM from frequency
-                freq = original_counter.get_frequency()
-                if freq > 0:
-                    # FrequencyCounter counts edges (both rising and falling)
-                    # For pulses_per_revolution=1, 1 pulse = 2 edges
-                    edges_per_rev = 2 * self.pulses_per_revolution
-                    calculated_rpm = (freq / edges_per_rev) * 60.0
-                    
-                    # Debug logging (only log occasionally to avoid spam)
-                    if not hasattr(hall_callback, '_log_counter'):
-                        hall_callback._log_counter = 0
-                    hall_callback._log_counter += 1
-                    if hall_callback._log_counter % 50 == 0:  # Log every 50 updates (~5 seconds)
-                        logging.info("Spindle Hall: freq=%.2f Hz, edges_per_rev=%d, calculated_rpm=%.1f" %
-                                    (freq, edges_per_rev, calculated_rpm))
-                    
-                    # Smooth RPM
-                    alpha = 0.3
-                    if not hasattr(self, '_smoothed_rpm') or self._smoothed_rpm == 0:
-                        self._smoothed_rpm = calculated_rpm
-                    else:
-                        self._smoothed_rpm = alpha * calculated_rpm + (1.0 - alpha) * self._smoothed_rpm
-                    
-                    self.current_rpm = self._smoothed_rpm
-                else:
-                    # No signal - RPM is 0
-                    self.current_rpm = 0.0
-                    self._smoothed_rpm = 0.0
-            
-            hall_callback._last_count = count
-            
-            # Call original callback if it exists
-            if original_callback:
-                original_callback(time, count, count_time)
-        
-        mcu_counter.setup_callback(hall_callback)
-        self.freq_counter = original_counter
-        
-        logging.info("Spindle Hall sensor '%s' initialized on %s, counter OID=%d" 
-                    % (self.name, self.hall_pin, mcu_counter._oid))
+    def handle_ready(self):
+        """Ensure counter is started when system is ready"""
+        # The counter should already be started by build_config, but log to confirm
+        if self.freq_counter:
+            mcu = self.freq_counter._mcu
+            logging.info("Spindle Hall sensor '%s' ready - counter OID=%d on MCU '%s'" %
+                        (self.name, self.freq_counter._oid, mcu._name))
     
     def get_rpm(self):
         """Get current RPM"""
-        if self.freq_counter:
-            freq = self.freq_counter.get_frequency()
-            if freq > 0:
-                edges_per_rev = 2 * self.pulses_per_revolution
-                return (freq / edges_per_rev) * 60.0
-        return 0.0
+        return self.current_rpm
     
     def get_count(self):
         """Get current pulse count"""
         return self.hall_count
     
+    def reset_count(self):
+        """Reset the pulse count to zero"""
+        self.hall_count = 0
+        self._last_count = 0
+        logging.info("Spindle Hall sensor '%s' count reset to 0" % self.name)
+    
     def get_frequency(self):
         """Get current frequency in Hz"""
-        if self.freq_counter:
-            return self.freq_counter.get_frequency()
+        # Calculate frequency from RPM
+        if self.current_rpm > 0:
+            edges_per_rev = 2 * self.pulses_per_revolution
+            return (self.current_rpm / 60.0) * edges_per_rev
         return 0.0
     
     def get_status(self, eventtime):
@@ -153,4 +158,3 @@ def load_config(config):
 def load_config_prefix(config):
     # For [spindle_hall main] style sections
     return SpindleHall(config)
-

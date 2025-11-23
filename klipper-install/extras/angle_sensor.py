@@ -45,6 +45,12 @@ class AngleSensor:
         self.angle_revolutions = 0  # Full revolutions tracked
         self.is_saturated = False
         
+        # Spindle homing/calibration
+        self.spindle_angle_offset = 0.0  # Angle offset to align with hall sensor (0° = hall trigger)
+        self.turn_count = 0  # Turn counter based on 0→360° crossings
+        self.last_angle_for_counting = None  # For detecting zero-crossings
+        self.calibrating_spindle = False  # Flag for calibration mode
+        
         # Calibration tracking
         self._angle_adc_observed_min = None
         self._angle_adc_observed_max = None
@@ -178,6 +184,17 @@ class AngleSensor:
         if len(self.angle_buffer) >= self.angle_buffer_max:
             self._process_buffer()
         
+        # Turn counting: detect 360° → 0° crossings (zero-crossing detection)
+        if self.last_angle_for_counting is not None:
+            # Detect crossing from high angle (>270°) to low angle (<90°)
+            if self.last_angle_for_counting > 270.0 and current_angle_deg < 90.0:
+                self.turn_count += 1
+                self.angle_revolutions += 1
+                logging.info("AngleSensor: Turn complete - count=%d, angle=%.1f°" % 
+                            (self.turn_count, current_angle_deg))
+        
+        self.last_angle_for_counting = current_angle_deg
+        
         # Update last values
         self.last_angle_value = current_angle_rad
         self.last_angle_time = read_time
@@ -235,6 +252,16 @@ class AngleSensor:
     def get_angle(self):
         """Get current angle in degrees"""
         return self.current_angle
+    
+    def get_turn_count(self):
+        """Get turn count from zero-crossings"""
+        return self.turn_count
+    
+    def reset_turn_count(self):
+        """Reset turn counter"""
+        self.turn_count = 0
+        self.angle_revolutions = 0
+        logging.info("AngleSensor: Turn count reset")
     
     def get_status(self, eventtime):
         """Get status for API"""
@@ -304,6 +331,30 @@ class AngleSensor:
                 gcmd.respond_info("ERROR: MIN and MAX required for manual calibration")
         else:
             gcmd.respond_info("ERROR: Unknown action. Use RESET or MANUAL")
+    
+    cmd_CALIBRATE_SPINDLE_ANGLE_help = "Calibrate spindle angle to hall sensor (magnet = 0°)"
+    def cmd_CALIBRATE_SPINDLE_ANGLE(self, gcmd):
+        """Calibrate spindle angle offset to align with hall sensor trigger point"""
+        set_offset = gcmd.get_float('SET_OFFSET', None, minval=0.0, maxval=360.0)
+        
+        if set_offset is not None:
+            self.spindle_angle_offset = set_offset
+            gcmd.respond_info("Spindle angle offset set to %.2f° (hall trigger = 0°)" % set_offset)
+            gcmd.respond_info("Current angle: %.2f° (raw), %.2f° (corrected)" % 
+                            (self.current_angle, (self.current_angle - self.spindle_angle_offset) % 360.0))
+        else:
+            gcmd.respond_info("Spindle Angle Calibration:")
+            gcmd.respond_info("  Current angle: %.2f°" % self.current_angle)
+            gcmd.respond_info("  Current offset: %.2f°" % self.spindle_angle_offset)
+            gcmd.respond_info("  Turn count: %d" % self.turn_count)
+            if self.spindle_hall:
+                hall_count = self.spindle_hall.get_count()
+                gcmd.respond_info("  Hall count: %d" % hall_count)
+            gcmd.respond_info("")
+            gcmd.respond_info("To calibrate:")
+            gcmd.respond_info("1. Manually rotate spindle to hall trigger point")
+            gcmd.respond_info("2. Note angle reading above")
+            gcmd.respond_info("3. Run: CALIBRATE_SPINDLE_ANGLE SET_OFFSET=<angle>")
 
 def load_config(config):
     return AngleSensor(config)

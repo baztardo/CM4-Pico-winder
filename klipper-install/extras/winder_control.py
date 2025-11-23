@@ -209,6 +209,19 @@ class WinderControl:
         self.spindle_rpm_target = spindle_rpm
         self.winding_direction = 1 if direction == 'forward' else -1
         
+        # Track winding session for completion report
+        reactor = self.printer.get_reactor()
+        self.winding_start_time = reactor.monotonic()
+        self.winding_commanded_rpm = spindle_rpm
+        self.winding_commanded_layers = layers
+        self.winding_expected_turns = 0  # Will be calculated below
+        
+        # Reset sensor turn counters at start
+        if self.angle_sensor and hasattr(self.angle_sensor, 'reset_turn_count'):
+            self.angle_sensor.reset_turn_count()
+        if self.spindle_hall and hasattr(self.spindle_hall, 'reset_count'):
+            self.spindle_hall.reset_count()
+        
         # Calculate motor RPM with calibration factor
         motor_rpm = (spindle_rpm / self.gear_ratio) * self.motor_speed_calibration
         
@@ -233,6 +246,9 @@ class WinderControl:
                     (turns_per_layer, self.bobbin_width, self.effective_wire_diameter))
         logging.info("WinderControl: Total expected turns for %d layers: %.1f" %
                     (layers, total_expected_turns))
+        
+        # Store for completion report
+        self.winding_expected_turns = total_expected_turns
         logging.info("WinderControl: Traverse speed: %.4f mm/s (%.1f RPM × %.4f mm wire)" %
                     (traverse_speed, spindle_rpm, self.effective_wire_diameter))
         logging.info("WinderControl: Gear ratio: %.3f (motor RPM %.1f → spindle RPM %.1f)" %
@@ -336,8 +352,73 @@ class WinderControl:
         
         toolhead.register_lookahead_callback(schedule_next_move)
     
+    def _generate_completion_report(self):
+        """Generate detailed completion report with all calibration data"""
+        reactor = self.printer.get_reactor()
+        winding_duration = reactor.monotonic() - self.winding_start_time
+        
+        # Get sensor turn counts
+        angle_turns = 0
+        hall_turns = 0
+        measured_rpm = 0.0
+        
+        if self.angle_sensor and hasattr(self.angle_sensor, 'get_turn_count'):
+            angle_turns = self.angle_sensor.get_turn_count()
+            measured_rpm = self.angle_sensor.get_rpm()
+        
+        if self.spindle_hall and hasattr(self.spindle_hall, 'get_count'):
+            hall_turns = self.spindle_hall.get_count()
+            if measured_rpm == 0.0:
+                measured_rpm = self.spindle_hall.get_rpm()
+        
+        # Calculate traverse distance
+        traverse_distance = self.bobbin_width * self.current_layer
+        
+        # Log completion report
+        logging.info("=" * 60)
+        logging.info("WINDING COMPLETION REPORT")
+        logging.info("=" * 60)
+        logging.info("COMMANDED PARAMETERS:")
+        logging.info("  RPM: %.1f" % self.winding_commanded_rpm)
+        logging.info("  Layers: %d" % self.winding_commanded_layers)
+        logging.info("  Expected turns: %.1f" % self.winding_expected_turns)
+        logging.info("")
+        logging.info("MEASURED RESULTS:")
+        logging.info("  Actual RPM: %.1f (%.1f%% of target)" % 
+                    (measured_rpm, (measured_rpm / self.winding_commanded_rpm * 100) if self.winding_commanded_rpm > 0 else 0))
+        logging.info("  Angle sensor turns: %d" % angle_turns)
+        logging.info("  Hall sensor turns: %d" % hall_turns)
+        logging.info("  Layers completed: %d" % self.current_layer)
+        logging.info("  Duration: %.1f seconds" % winding_duration)
+        logging.info("")
+        logging.info("ACCURACY:")
+        if angle_turns > 0:
+            angle_error = ((angle_turns - self.winding_expected_turns) / self.winding_expected_turns * 100) if self.winding_expected_turns > 0 else 0
+            logging.info("  Angle sensor error: %+.1f%% (%+d turns)" % (angle_error, angle_turns - int(self.winding_expected_turns)))
+        if hall_turns > 0:
+            hall_error = ((hall_turns - self.winding_expected_turns) / self.winding_expected_turns * 100) if self.winding_expected_turns > 0 else 0
+            logging.info("  Hall sensor error: %+.1f%% (%+d turns)" % (hall_error, hall_turns - int(self.winding_expected_turns)))
+        if angle_turns > 0 and hall_turns > 0:
+            sensor_sync = abs(angle_turns - hall_turns)
+            logging.info("  Sensor sync difference: %d turns" % sensor_sync)
+            if sensor_sync > 2:
+                logging.warning("  WARNING: Sensors out of sync by %d turns!" % sensor_sync)
+        logging.info("")
+        logging.info("SYSTEM PARAMETERS:")
+        logging.info("  Wire diameter: %.4f mm (%.4f bare + %.4f coating)" % 
+                    (self.effective_wire_diameter, self.wire_diameter, self.wire_coating_margin))
+        logging.info("  Bobbin width: %.3f mm" % self.bobbin_width)
+        logging.info("  Traverse distance: %.3f mm" % traverse_distance)
+        logging.info("  Gear ratio: %.3f" % self.gear_ratio)
+        logging.info("  Motor calibration: %.3f" % self.motor_speed_calibration)
+        logging.info("=" * 60)
+    
     def stop_winding(self):
         """Stop winding operation"""
+        # Generate completion report BEFORE stopping
+        if hasattr(self, 'winding_start_time'):
+            self._generate_completion_report()
+        
         self.is_winding = False
         
         # Stop BLDC motor
