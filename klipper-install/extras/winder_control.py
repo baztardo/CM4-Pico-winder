@@ -48,13 +48,20 @@ class WinderControl:
         # Winding parameters
         self.gear_ratio = config.getfloat('gear_ratio', 0.667, above=0.0, below=1.0)
         self.wire_diameter = config.getfloat('wire_diameter', 0.056, above=0.001)
+        self.wire_coating_margin = config.getfloat('wire_coating_margin', 0.0, minval=0.0, maxval=0.020)
         self.bobbin_width = config.getfloat('bobbin_width', 12.0, above=0.0)
         self.spindle_edge_offset = config.getfloat('spindle_edge', 38.0, minval=0.0)
         self.home_offset = config.getfloat('home_offset', 2.0, minval=0.0)
         
+        # Calculate effective wire diameter (bare wire + coating)
+        self.effective_wire_diameter = self.wire_diameter + self.wire_coating_margin
+        
         # Speed limits
         self.max_spindle_rpm = config.getfloat('max_spindle_rpm', 2000.0, above=0.0)
         self.min_spindle_rpm = config.getfloat('min_spindle_rpm', 10.0, above=0.0)
+        
+        # Motor speed calibration factor (compensates for non-linear motor response)
+        self.motor_speed_calibration = config.getfloat('motor_speed_calibration', 1.0, above=0.5, below=2.0)
         
         # Sync parameters
         self.sync_update_rate = config.getfloat('sync_update_rate', 10.0, above=1.0, below=50.0)
@@ -133,51 +140,39 @@ class WinderControl:
         # Return Hall sensor if available
         return hall_rpm if hall_rpm > 0 else 0.0
     
-    def calculate_traverse_speed(self, spindle_rpm, wire_diameter):
-        """Calculate traverse speed to match spindle RPM"""
+    def calculate_traverse_speed(self, spindle_rpm, wire_diameter=None):
+        """Calculate traverse speed to match spindle RPM
+        
+        Args:
+            spindle_rpm: Spindle RPM
+            wire_diameter: Wire diameter (defaults to effective_wire_diameter)
+        """
         if spindle_rpm <= 0:
             return 0.0
+        
+        # Use effective wire diameter (bare + coating) if not specified
+        if wire_diameter is None:
+            wire_diameter = self.effective_wire_diameter
+        
         revs_per_second = spindle_rpm / 60.0
         traverse_speed = revs_per_second * wire_diameter
         return traverse_speed
     
     def _sync_traverse_to_spindle(self, eventtime):
-        """Real-time sync adjustment based on measured RPM"""
+        """Real-time sync adjustment based on measured RPM with motor feedback correction"""
         if not self.is_winding:
             return self.printer.get_reactor().NEVER
         
-        try:
-            # Get measured RPM
-            measured_rpm = self.get_spindle_rpm()
-            if measured_rpm <= 0:
-                measured_rpm = self.spindle_rpm_target  # Fallback to target
-            
-            self.spindle_rpm_measured = measured_rpm
-            
-            # Calculate required traverse speed
-            required_speed = self.calculate_traverse_speed(measured_rpm, self.wire_diameter)
-            
-            if required_speed > 0 and self.traverse:
-                toolhead = self.printer.lookup_object('toolhead')
-                current_speed = toolhead.get_status(eventtime)['max_velocity']
-                
-                # Calculate speed error
-                speed_error = abs(required_speed - current_speed) / required_speed if required_speed > 0 else 1.0
-                
-                # Only update if error is significant (>5%)
-                if speed_error > 0.05:
-                    def update_velocity_callback(print_time):
-                        min_spacing = 0.05
-                        base_time = max(print_time, toolhead.get_last_move_time() + min_spacing)
-                        toolhead.set_max_velocities(required_speed * 1.1, None, None, None)
-                    
-                    toolhead.register_lookahead_callback(update_velocity_callback)
-            
-            return eventtime + (1.0 / self.sync_update_rate)
-            
-        except Exception as e:
-            logging.warning("WinderControl: Sync error: %s" % e)
-            return eventtime + 0.1
+        # DISABLED: Closed-loop RPM correction causing "Timer too close" MCU shutdowns
+        # The unstable RPM readings (0-300 RPM jumps) cause constant motor speed changes
+        # that overwhelm the MCU scheduler, especially at slow traverse speeds (0.36mm/s)
+        #
+        # TODO: Re-enable after fixing:
+        # 1. Angle sensor RPM calculation (needs better filtering)
+        # 2. Hall sensor not working (Count: 0)
+        # 3. Add rate limiting to motor speed changes (max 1 change per second)
+        
+        return eventtime + (1.0 / self.sync_update_rate)
     
     def start_winding(self, spindle_rpm, layers=1, direction='forward'):
         """Start winding operation"""
@@ -194,13 +189,28 @@ class WinderControl:
         except Exception as e:
             logging.warning("WinderControl: Could not check printer state: %s" % e)
         
+        # Move to start position FIRST (before starting motor)
+        if self.traverse:
+            is_homed = self.traverse.check_homed() if hasattr(self.traverse, 'check_homed') else self.traverse.is_homed
+            if is_homed:
+                start_y = self.spindle_edge_offset
+                gcode = self.printer.lookup_object('gcode')
+                toolhead = self.printer.lookup_object('toolhead')
+                current_pos = toolhead.get_position()
+                
+                logging.info("WinderControl: Moving to start position Y%.2f from Y%.2f" % (start_y, current_pos[1]))
+                gcode.run_script_from_command("G1 Y%.2f F300" % start_y)
+                logging.info("WinderControl: At start position Y%.2f" % start_y)
+            else:
+                logging.warning("WinderControl: Traverse not homed - cannot move to start position. Run G28 Y first.")
+        
         self.is_winding = True
         self.current_layer = 0
         self.spindle_rpm_target = spindle_rpm
         self.winding_direction = 1 if direction == 'forward' else -1
         
-        # Calculate motor RPM
-        motor_rpm = spindle_rpm / self.gear_ratio
+        # Calculate motor RPM with calibration factor
+        motor_rpm = (spindle_rpm / self.gear_ratio) * self.motor_speed_calibration
         
         # Start BLDC motor
         if self.bldc_motor:
@@ -208,8 +218,25 @@ class WinderControl:
         else:
             logging.warning("WinderControl: BLDC motor not available - cannot start motor")
         
-        # Calculate traverse speed
-        traverse_speed = self.calculate_traverse_speed(spindle_rpm, self.wire_diameter)
+        # Calculate traverse speed using effective wire diameter
+        traverse_speed = self.calculate_traverse_speed(spindle_rpm)
+        
+        # Calculate expected turns per layer for verification
+        # NOTE: 1 layer = 1 pass (either forward OR backward)
+        traverse_per_layer = self.bobbin_width
+        turns_per_layer = traverse_per_layer / self.effective_wire_diameter
+        total_expected_turns = turns_per_layer * layers
+        
+        logging.info("WinderControl: Wire diameter: %.4f mm bare + %.4f mm coating = %.4f mm effective" %
+                    (self.wire_diameter, self.wire_coating_margin, self.effective_wire_diameter))
+        logging.info("WinderControl: Expected turns per layer: %.1f (%.3f mm / %.4f mm wire)" %
+                    (turns_per_layer, self.bobbin_width, self.effective_wire_diameter))
+        logging.info("WinderControl: Total expected turns for %d layers: %.1f" %
+                    (layers, total_expected_turns))
+        logging.info("WinderControl: Traverse speed: %.4f mm/s (%.1f RPM × %.4f mm wire)" %
+                    (traverse_speed, spindle_rpm, self.effective_wire_diameter))
+        logging.info("WinderControl: Gear ratio: %.3f (motor RPM %.1f → spindle RPM %.1f)" %
+                    (self.gear_ratio, motor_rpm, spindle_rpm))
         
         # Start sync timer
         reactor = self.printer.get_reactor()
@@ -227,7 +254,7 @@ class WinderControl:
                     is_homed = self.traverse.check_homed() if hasattr(self.traverse, 'check_homed') else self.traverse.is_homed
                     
                     if is_homed:
-                        # Start layer winding
+                        # Start layer winding (already at start position from earlier move)
                         logging.info("WinderControl: Starting traverse motion - start=%.2f, end=%.2f, speed=%.3f mm/s" %
                                     (start_y, end_y, traverse_speed))
                         self._start_winding_layer(start_y, end_y, traverse_speed, layers)
@@ -244,35 +271,70 @@ class WinderControl:
                     (spindle_rpm, motor_rpm, traverse_speed, layers))
     
     def _start_winding_layer(self, start_y, end_y, traverse_speed, layers):
-        """Start winding layer motion with proper back-and-forth"""
+        """Start winding layer motion with proper back-and-forth using non-blocking callbacks"""
         toolhead = self.printer.lookup_object('toolhead')
+        reactor = self.printer.get_reactor()
         
         # Set max velocity for sync algorithm
         toolhead.set_max_velocities(traverse_speed * 1.1, None, None, None)
         
-        for layer in range(layers):
-            if not self.is_winding:
-                break
-            
-            # Move forward (start → end)
-            toolhead.manual_move([None, end_y, None, None], traverse_speed)
-            toolhead.wait_moves()
-            
-            if not self.is_winding:
-                break
-            
-            # Move backward (end → start)
-            toolhead.manual_move([None, start_y, None, None], traverse_speed)
-            toolhead.wait_moves()
-            
-            self.current_layer = layer + 1
-            logging.info("WinderControl: Completed layer %d of %d (RPM: %.1f, Speed: %.3f mm/s)" %
-                        (self.current_layer, layers, self.get_spindle_rpm(), traverse_speed))
+        # State for the winding loop
+        self.winding_state = {
+            'current_layer': 0,
+            'total_layers': layers,
+            'start_y': start_y,
+            'end_y': end_y,
+            'traverse_speed': traverse_speed,
+            'direction': 'forward'  # Start moving forward
+        }
         
-        # Stop winding when layers complete
-        if self.is_winding:
+        # Start first move
+        self._execute_next_winding_move()
+    
+    def _execute_next_winding_move(self):
+        """Execute next move in winding sequence (non-blocking)"""
+        if not self.is_winding or not hasattr(self, 'winding_state'):
+            return
+        
+        state = self.winding_state
+        
+        # Check if all layers complete
+        if state['current_layer'] >= state['total_layers']:
+            logging.info("WinderControl: Winding complete - %d layers finished" % state['total_layers'])
             self.stop_winding()
-            logging.info("WinderControl: Winding complete - %d layers finished" % layers)
+            return
+        
+        toolhead = self.printer.lookup_object('toolhead')
+        
+        # Determine target position based on direction
+        if state['direction'] == 'forward':
+            target_y = state['end_y']
+            next_direction = 'backward'
+            logging.info("WinderControl: Layer %d/%d - Moving FORWARD to %.2f mm at %.3f mm/s" %
+                        (state['current_layer'] + 1, state['total_layers'], target_y, state['traverse_speed']))
+            # Increment layer after forward pass (1 layer = 1 pass)
+            state['current_layer'] += 1
+            self.current_layer = state['current_layer']
+        else:
+            target_y = state['start_y']
+            next_direction = 'forward'
+            logging.info("WinderControl: Layer %d/%d - Moving BACKWARD to %.2f mm at %.3f mm/s" %
+                        (state['current_layer'], state['total_layers'], target_y, state['traverse_speed']))
+        
+        # Queue the move
+        toolhead.manual_move([None, target_y, None, None], state['traverse_speed'])
+        
+        # Update direction for next move
+        state['direction'] = next_direction
+        
+        # Schedule next move using lookahead callback (non-blocking)
+        def schedule_next_move(print_time):
+            """Callback to schedule next move after current move completes"""
+            reactor = self.printer.get_reactor()
+            # Small delay to ensure move has started
+            reactor.register_callback(lambda et: self._execute_next_winding_move(), reactor.monotonic() + 0.1)
+        
+        toolhead.register_lookahead_callback(schedule_next_move)
     
     def stop_winding(self):
         """Stop winding operation"""
@@ -287,6 +349,24 @@ class WinderControl:
         if self.sync_timer:
             reactor.update_timer(self.sync_timer, reactor.NEVER)
         
+        # Reset max velocities to default (120 mm/s from printer.cfg)
+        try:
+            toolhead = self.printer.lookup_object('toolhead')
+            # Get default max velocity from config
+            kin = toolhead.get_kinematics()
+            if hasattr(kin, 'max_velocity'):
+                default_velocity = kin.max_velocity
+            else:
+                default_velocity = 120.0  # Fallback to config value
+            toolhead.set_max_velocities(default_velocity, None, None, None)
+            logging.info("WinderControl: Reset max velocity to %.1f mm/s" % default_velocity)
+        except Exception as e:
+            logging.warning("WinderControl: Could not reset max velocity: %s" % e)
+        
+        # Clear winding state
+        if hasattr(self, 'winding_state'):
+            delattr(self, 'winding_state')
+        
         logging.info("WinderControl: Stopped")
     
     def get_status(self, eventtime):
@@ -297,6 +377,8 @@ class WinderControl:
             'spindle_rpm_measured': self.get_spindle_rpm(),
             'current_layer': self.current_layer,
             'wire_diameter': self.wire_diameter,
+            'wire_coating_margin': self.wire_coating_margin,
+            'effective_wire_diameter': self.effective_wire_diameter,
             'bobbin_width': self.bobbin_width,
             'gear_ratio': self.gear_ratio,
         }

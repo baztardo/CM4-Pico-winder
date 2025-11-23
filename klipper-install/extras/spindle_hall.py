@@ -73,6 +73,14 @@ class SpindleHall:
                     edges_per_rev = 2 * self.pulses_per_revolution
                     calculated_rpm = (freq / edges_per_rev) * 60.0
                     
+                    # Debug logging (only log occasionally to avoid spam)
+                    if not hasattr(hall_callback, '_log_counter'):
+                        hall_callback._log_counter = 0
+                    hall_callback._log_counter += 1
+                    if hall_callback._log_counter % 50 == 0:  # Log every 50 updates (~5 seconds)
+                        logging.info("Spindle Hall: freq=%.2f Hz, edges_per_rev=%d, calculated_rpm=%.1f" %
+                                    (freq, edges_per_rev, calculated_rpm))
+                    
                     # Smooth RPM
                     alpha = 0.3
                     if not hasattr(self, '_smoothed_rpm') or self._smoothed_rpm == 0:

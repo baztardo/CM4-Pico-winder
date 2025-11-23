@@ -68,6 +68,21 @@ class AngleSensor:
         # Register event handlers
         self.printer.register_event_handler("klippy:connect", self.handle_connect)
         
+        # Setup ADC angle sensor - DO THIS IN __init__ LIKE THE WORKING OLD CODE
+        ppins = self.printer.lookup_object('pins')
+        self.mcu_adc = ppins.setup_pin('adc', self.sensor_pin)
+        # Sample every 1ms, average 4 samples, callback every 10ms for fast buffering
+        self.mcu_adc.setup_adc_sample(SAMPLE_TIME, SAMPLE_COUNT)
+        self.mcu_adc.setup_adc_callback(CALLBACK_TIME, self._adc_callback)
+        # Register with query_adc if available (optional)
+        try:
+            query_adc = self.printer.lookup_object('query_adc')
+            query_adc.register_adc(self.name, self.mcu_adc)
+        except Exception:
+            pass  # query_adc not available - ADC callbacks still work
+        
+        logging.info("Angle sensor '%s' ADC initialized on %s" % (self.name, self.sensor_pin))
+        
         # Register G-code commands
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command("QUERY_ANGLE_SENSOR", self.cmd_QUERY_ANGLE_SENSOR,
@@ -76,31 +91,25 @@ class AngleSensor:
                                desc=self.cmd_ANGLE_SENSOR_CALIBRATE_help)
     
     def handle_connect(self):
-        """Setup ADC pin when MCU connects"""
-        ppins = self.printer.lookup_object('pins')
-        self.mcu_adc = ppins.setup_pin('adc', self.sensor_pin)
-        
-        # Setup ADC sampling and callback
-        self.mcu_adc.setup_adc_sample(SAMPLE_TIME, SAMPLE_COUNT)
-        self.mcu_adc.setup_adc_callback(CALLBACK_TIME, self._adc_callback)
-        
-        # Register with query_adc if available
-        try:
-            query_adc = self.printer.lookup_object('query_adc')
-            query_adc.register_adc(self.name, self.mcu_adc)
-        except Exception:
-            pass  # query_adc not available - ADC callbacks still work
-        
+        """Handle MCU connection"""
         # Try to get spindle_hall reference for saturation handling
         try:
             self.spindle_hall = self.printer.lookup_object('spindle_hall', None)
         except Exception:
             pass
         
-        logging.info("Angle sensor '%s' initialized on pin %s" % (self.name, self.sensor_pin))
+        logging.info("Angle sensor '%s' ready" % self.name)
     
     def _adc_callback(self, read_time, read_value):
         """ADC callback - processes angle sensor readings"""
+        # DEBUG: Log every callback to verify it's being called
+        if not hasattr(self, '_callback_count'):
+            self._callback_count = 0
+        self._callback_count += 1
+        if self._callback_count % 100 == 0:  # Log every 100 callbacks
+            logging.info("Angle sensor ADC callback #%d: time=%.3f, value=%.6f" % 
+                        (self._callback_count, read_time, read_value))
+        
         # Auto-calibrate if enabled
         if self.angle_auto_calibrate and not self._angle_calibration_complete:
             if self._angle_adc_observed_min is None or read_value < self._angle_adc_observed_min:
