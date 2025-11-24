@@ -63,6 +63,9 @@ class WinderControl:
         # Motor speed calibration factor (compensates for non-linear motor response)
         self.motor_speed_calibration = config.getfloat('motor_speed_calibration', 1.0, above=0.5, below=2.0)
         
+        # Hall sensor correction factor (compensates for missed edges)
+        self.hall_sensor_correction = config.getfloat('hall_sensor_correction', 1.0, minval=1.0, maxval=5.0)
+        
         # Sync parameters
         self.sync_update_rate = config.getfloat('sync_update_rate', 10.0, above=1.0, below=50.0)
         self.sync_tolerance = config.getfloat('sync_tolerance', 0.01, above=0.0, below=0.1)
@@ -331,6 +334,18 @@ class WinderControl:
             # Increment layer after forward pass (1 layer = 1 pass)
             state['current_layer'] += 1
             self.current_layer = state['current_layer']
+            
+            # Check if we're done after this forward pass
+            if state['current_layer'] >= state['total_layers']:
+                # Queue the forward move, but don't schedule a backward move
+                toolhead.manual_move([None, target_y, None, None], state['traverse_speed'])
+                logging.info("WinderControl: Winding complete - %d layers finished" % state['total_layers'])
+                # Schedule stop after move completes
+                def stop_after_move(print_time):
+                    reactor = self.printer.get_reactor()
+                    reactor.register_callback(lambda et: self.stop_winding(), reactor.monotonic() + 0.1)
+                toolhead.register_lookahead_callback(stop_after_move)
+                return
         else:
             target_y = state['start_y']
             next_direction = 'forward'
@@ -362,14 +377,18 @@ class WinderControl:
         hall_turns = 0
         measured_rpm = 0.0
         
+        # Prioritize Hall sensor for RPM (more reliable than angle sensor)
+        if self.spindle_hall and hasattr(self.spindle_hall, 'get_count'):
+            hall_turns_raw = self.spindle_hall.get_count()
+            # Apply correction factor to compensate for missed edges
+            hall_turns = int(hall_turns_raw * self.hall_sensor_correction)
+            measured_rpm = self.spindle_hall.get_rpm()
+        
         if self.angle_sensor and hasattr(self.angle_sensor, 'get_turn_count'):
             angle_turns = self.angle_sensor.get_turn_count()
-            measured_rpm = self.angle_sensor.get_rpm()
-        
-        if self.spindle_hall and hasattr(self.spindle_hall, 'get_count'):
-            hall_turns = self.spindle_hall.get_count()
+            # Only use angle sensor RPM if Hall sensor unavailable
             if measured_rpm == 0.0:
-                measured_rpm = self.spindle_hall.get_rpm()
+                measured_rpm = self.angle_sensor.get_rpm()
         
         # Calculate traverse distance
         traverse_distance = self.bobbin_width * self.current_layer
@@ -387,7 +406,8 @@ class WinderControl:
         logging.info("  Actual RPM: %.1f (%.1f%% of target)" % 
                     (measured_rpm, (measured_rpm / self.winding_commanded_rpm * 100) if self.winding_commanded_rpm > 0 else 0))
         logging.info("  Angle sensor turns: %d" % angle_turns)
-        logging.info("  Hall sensor turns: %d" % hall_turns)
+        logging.info("  Hall sensor turns (raw): %d" % hall_turns_raw)
+        logging.info("  Hall sensor turns (corrected): %d (×%.2f)" % (hall_turns, self.hall_sensor_correction))
         logging.info("  Layers completed: %d" % self.current_layer)
         logging.info("  Duration: %.1f seconds" % winding_duration)
         logging.info("")
@@ -397,7 +417,7 @@ class WinderControl:
             logging.info("  Angle sensor error: %+.1f%% (%+d turns)" % (angle_error, angle_turns - int(self.winding_expected_turns)))
         if hall_turns > 0:
             hall_error = ((hall_turns - self.winding_expected_turns) / self.winding_expected_turns * 100) if self.winding_expected_turns > 0 else 0
-            logging.info("  Hall sensor error: %+.1f%% (%+d turns)" % (hall_error, hall_turns - int(self.winding_expected_turns)))
+            logging.info("  Hall sensor error (corrected): %+.1f%% (%+d turns)" % (hall_error, hall_turns - int(self.winding_expected_turns)))
         if angle_turns > 0 and hall_turns > 0:
             sensor_sync = abs(angle_turns - hall_turns)
             logging.info("  Sensor sync difference: %d turns" % sensor_sync)
@@ -411,6 +431,7 @@ class WinderControl:
         logging.info("  Traverse distance: %.3f mm" % traverse_distance)
         logging.info("  Gear ratio: %.3f" % self.gear_ratio)
         logging.info("  Motor calibration: %.3f" % self.motor_speed_calibration)
+        logging.info("  Hall sensor correction: %.2f" % self.hall_sensor_correction)
         logging.info("=" * 60)
     
     def stop_winding(self):

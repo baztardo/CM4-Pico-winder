@@ -19,7 +19,8 @@ class SpindleHall:
         # Sensor parameters
         self.pulses_per_revolution = config.getint('pulses_per_revolution', 1, minval=1)
         self.sample_time = config.getfloat('sample_time', 0.01, above=0.001)
-        self.poll_time = config.getfloat('poll_time', 0.1, above=0.01)
+        self.poll_time = config.getfloat('poll_time', 0.00001, minval=0.000001)  # 10µs default (100kHz)
+        self.min_pulse_time = config.getfloat('min_pulse_time', 0.010, above=0.001)  # Minimum 10ms between pulses (debounce)
         
         # State
         self.freq_counter = None
@@ -46,18 +47,31 @@ class SpindleHall:
             if not hasattr(hall_callback, '_last_count'):
                 hall_callback._last_count = 0
                 hall_callback._last_time = None
+                hall_callback._last_count_time = None
                 hall_callback._callback_num = 0
             
             hall_callback._callback_num += 1
             
             # DEBUG: Log EVERY callback for first 20
             if hall_callback._callback_num <= 20:
-                logging.info("Spindle Hall callback #%d: time=%.3f, count=%d, count_time=%.3f" %
+                logging.info("=== HALL SENSOR === Callback #%d: time=%.3f, count=%d, count_time=%.3f" %
                             (hall_callback._callback_num, time, count, count_time))
             
-            # Update count
+            # Update count with debouncing
             delta = count - hall_callback._last_count
+            
+            # Debounce: ignore pulses that are too close together (likely noise)
+            if delta > 0 and hall_callback._last_count_time is not None:
+                time_since_last = count_time - hall_callback._last_count_time
+                if time_since_last < self.min_pulse_time:
+                    # Too fast - likely noise, ignore this pulse
+                    if hall_callback._callback_num % 50 == 0:
+                        logging.info("=== HALL SENSOR === Ignoring noise: delta_time=%.3fms (min=%.3fms)" %
+                                    (time_since_last * 1000, self.min_pulse_time * 1000))
+                    return  # Don't update count
+            
             self.hall_count = count
+            hall_callback._last_count_time = count_time
             
             # Calculate RPM from count changes
             if delta > 0 and hall_callback._last_time is not None:
@@ -80,7 +94,7 @@ class SpindleHall:
                     
                     # Debug logging occasionally
                     if hall_callback._callback_num % 50 == 0:
-                        logging.info("Spindle Hall: delta=%d, delta_time=%.3f, freq=%.2f Hz, RPM=%.1f" %
+                        logging.info("=== HALL SENSOR === delta=%d, delta_time=%.3f, freq=%.2f Hz, RPM=%.1f" %
                                     (delta, delta_time, freq, calculated_rpm))
             
             hall_callback._last_count = count
