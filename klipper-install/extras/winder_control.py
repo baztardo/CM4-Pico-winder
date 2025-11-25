@@ -63,8 +63,9 @@ class WinderControl:
         # Motor speed calibration factor (compensates for non-linear motor response)
         self.motor_speed_calibration = config.getfloat('motor_speed_calibration', 1.0, above=0.5, below=2.0)
         
-        # Hall sensor correction factor (compensates for missed edges)
-        self.hall_sensor_correction = config.getfloat('hall_sensor_correction', 1.0, minval=1.0, maxval=5.0)
+        # Hall sensor correction factor (compensates for missed edges / double edges)
+        # Can be < 1.0 if counting both edges (e.g., 0.5 for edge-to-revolution conversion)
+        self.hall_sensor_correction = config.getfloat('hall_sensor_correction', 1.0, minval=0.1, maxval=5.0)
         
         # Sync parameters
         self.sync_update_rate = config.getfloat('sync_update_rate', 10.0, above=1.0, below=50.0)
@@ -299,8 +300,8 @@ class WinderControl:
         
         # State for the winding loop
         self.winding_state = {
-            'current_layer': 0,
-            'total_layers': layers,
+            'current_pass': 0,   # 1 pass == 1 layer
+            'total_passes': layers,
             'start_y': start_y,
             'end_y': end_y,
             'traverse_speed': traverse_speed,
@@ -317,52 +318,46 @@ class WinderControl:
         
         state = self.winding_state
         
-        # Check if all layers complete
-        if state['current_layer'] >= state['total_layers']:
-            logging.info("WinderControl: Winding complete - %d layers finished" % state['total_layers'])
+        # Check if all passes complete
+        if state['current_pass'] >= state['total_passes']:
+            logging.info("WinderControl: Winding complete - %d layers finished" % state['total_passes'])
             self.stop_winding()
             return
         
         toolhead = self.printer.lookup_object('toolhead')
         
         # Determine target position based on direction
-        if state['direction'] == 'forward':
-            target_y = state['end_y']
-            next_direction = 'backward'
-            logging.info("WinderControl: Layer %d/%d - Moving FORWARD to %.2f mm at %.3f mm/s" %
-                        (state['current_layer'] + 1, state['total_layers'], target_y, state['traverse_speed']))
-            # Increment layer after forward pass (1 layer = 1 pass)
-            state['current_layer'] += 1
-            self.current_layer = state['current_layer']
-            
-            # Check if we're done after this forward pass
-            if state['current_layer'] >= state['total_layers']:
-                # Queue the forward move, but don't schedule a backward move
-                toolhead.manual_move([None, target_y, None, None], state['traverse_speed'])
-                logging.info("WinderControl: Winding complete - %d layers finished" % state['total_layers'])
-                # Schedule stop after move completes
-                def stop_after_move(print_time):
-                    reactor = self.printer.get_reactor()
-                    reactor.register_callback(lambda et: self.stop_winding(), reactor.monotonic() + 0.1)
-                toolhead.register_lookahead_callback(stop_after_move)
-                return
-        else:
-            target_y = state['start_y']
-            next_direction = 'forward'
-            logging.info("WinderControl: Layer %d/%d - Moving BACKWARD to %.2f mm at %.3f mm/s" %
-                        (state['current_layer'], state['total_layers'], target_y, state['traverse_speed']))
+        moving_forward = state['direction'] == 'forward'
+        target_y = state['end_y'] if moving_forward else state['start_y']
+        next_direction = 'backward' if moving_forward else 'forward'
+        
+        logging.info("WinderControl: Layer %d/%d - Moving %s to %.2f mm at %.3f mm/s" %
+                    (state['current_pass'] + 1, state['total_passes'],
+                     "FORWARD" if moving_forward else "BACKWARD",
+                     target_y, state['traverse_speed']))
+        
+        # Increment pass count and expose to completion report
+        state['current_pass'] += 1
+        self.current_layer = state['current_pass']
         
         # Queue the move
         toolhead.manual_move([None, target_y, None, None], state['traverse_speed'])
         
         # Update direction for next move
+        if state['current_pass'] >= state['total_passes']:
+            logging.info("WinderControl: Winding complete - %d layers finished" % state['total_passes'])
+            def stop_after_move(print_time):
+                reactor = self.printer.get_reactor()
+                reactor.register_callback(lambda et: self.stop_winding(), reactor.monotonic() + 0.1)
+            toolhead.register_lookahead_callback(stop_after_move)
+            return
+        
         state['direction'] = next_direction
         
         # Schedule next move using lookahead callback (non-blocking)
         def schedule_next_move(print_time):
             """Callback to schedule next move after current move completes"""
             reactor = self.printer.get_reactor()
-            # Small delay to ensure move has started
             reactor.register_callback(lambda et: self._execute_next_winding_move(), reactor.monotonic() + 0.1)
         
         toolhead.register_lookahead_callback(schedule_next_move)
@@ -375,6 +370,7 @@ class WinderControl:
         # Get sensor turn counts
         angle_turns = 0
         hall_turns = 0
+        hall_turns_raw = 0
         measured_rpm = 0.0
         
         # Prioritize Hall sensor for RPM (more reliable than angle sensor)
@@ -389,6 +385,10 @@ class WinderControl:
             # Only use angle sensor RPM if Hall sensor unavailable
             if measured_rpm == 0.0:
                 measured_rpm = self.angle_sensor.get_rpm()
+        
+        # Fallback RPM calculation based on hall counts and duration
+        if measured_rpm == 0.0 and hall_turns > 0 and winding_duration > 0:
+            measured_rpm = (hall_turns / winding_duration) * 60.0
         
         # Calculate traverse distance
         traverse_distance = self.bobbin_width * self.current_layer
@@ -436,18 +436,31 @@ class WinderControl:
     
     def stop_winding(self):
         """Stop winding operation"""
-        # Generate completion report BEFORE stopping
-        if hasattr(self, 'winding_start_time'):
-            self._generate_completion_report()
-        
         self.is_winding = False
         
         # Stop BLDC motor
         if self.bldc_motor:
             self.bldc_motor.stop_motor()
+
+        # Force hall counter to report one last time
+        if self.spindle_hall and hasattr(self.spindle_hall, 'force_update'):
+            self.spindle_hall.force_update()
+
+        # Allow spindle to coast down and capture final hall counts
+        reactor = self.printer.get_reactor()
+        if self.spindle_hall and hasattr(self.spindle_hall, 'get_count'):
+            settle_deadline = reactor.monotonic() + 1.0
+            last_count = self.spindle_hall.get_count()
+            while reactor.monotonic() < settle_deadline:
+                reactor.pause(0.05)
+                new_count = self.spindle_hall.get_count()
+                if new_count == last_count:
+                    break
+                last_count = new_count
+            if hasattr(self.spindle_hall, 'force_update'):
+                self.spindle_hall.force_update()
         
         # Stop sync timer
-        reactor = self.printer.get_reactor()
         if self.sync_timer:
             reactor.update_timer(self.sync_timer, reactor.NEVER)
         
@@ -468,6 +481,10 @@ class WinderControl:
         # Clear winding state
         if hasattr(self, 'winding_state'):
             delattr(self, 'winding_state')
+        
+        # Generate completion report AFTER spindle stops
+        if hasattr(self, 'winding_start_time'):
+            self._generate_completion_report()
         
         logging.info("WinderControl: Stopped")
     

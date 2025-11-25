@@ -61,6 +61,8 @@ pin: ^PA15    # Hall sensor pin
 sample_time: 0.1  # How often to report count (doesn't affect accuracy!)
 ```
 
+> **Note:** The firmware reports raw edge counts (rising + falling). A single-magnet Hall sensor produces two edges per revolution, so apply a 0.5 scale factor (e.g. `hall_sensor_correction: 0.5`) in `printer.cfg` to convert edges to turns.
+
 ### 5. Update spindle_hall.py Reference
 
 In `winder_control.py`, change:

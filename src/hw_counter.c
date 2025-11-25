@@ -3,19 +3,19 @@
 // Copyright (C) 2024
 //
 // This file may be distributed under the terms of the GNU GPLv3 license.
-//
-// Uses hardware EXTI interrupts to count edges with 100% accuracy
 
 #include "autoconf.h" // CONFIG_MACH_STM32G0
+#include "board/armcm_boot.h" // armcm_enable_irq
 #include "board/gpio.h" // gpio_in_setup
 #include "board/irq.h" // irq_disable
 #include "board/misc.h" // timer_read_time
 #include "command.h" // DECL_COMMAND
 #include "sched.h" // struct timer
 #include "basecmd.h" // oid_alloc
-#include "board/internal.h" // GPIO2PORT, GPIO2BIT, STM32 registers
 
 #if CONFIG_MACH_STM32G0
+
+#include "board/internal.h" // GPIO2PORT, GPIO2BIT
 
 struct hw_counter {
     struct timer timer;
@@ -34,8 +34,19 @@ enum {
 static struct task_wake hw_counter_wake;
 static struct hw_counter *exti_counters[16] = {0};  // One per EXTI line
 
+static void
+hw_counter_configure_exti_source(uint8_t exti_line, uint8_t port)
+{
+    uint32_t shift = (exti_line % 4) * 4;
+    volatile uint32_t *exticr = (volatile uint32_t *)((uint32_t)&SYSCFG->CFGR1 + (exti_line / 4) * 4);
+    uint32_t mask = 0xF << shift;
+    irqstatus_t flag = irq_save();
+    *exticr = (*exticr & ~mask) | ((uint32_t)port << shift);
+    irq_restore(flag);
+}
+
 // EXTI interrupt handler - called on EVERY edge
-void
+static void
 hw_counter_exti_irq(uint8_t exti_line)
 {
     struct hw_counter *hc = exti_counters[exti_line];
@@ -46,13 +57,14 @@ hw_counter_exti_irq(uint8_t exti_line)
     hc->count++;
     hc->last_count_time = timer_read_time();
     
-    // Clear EXTI pending bit
+    // Clear EXTI pending bits
     EXTI->RPR1 = (1 << exti_line);  // Rising edge
     EXTI->FPR1 = (1 << exti_line);  // Falling edge
 }
 
 // STM32G0 EXTI interrupt handlers
-void __visible EXTI0_1_IRQHandler(void)
+void
+EXTI0_1_IRQHandler(void)
 {
     uint32_t pending = EXTI->RPR1 | EXTI->FPR1;
     if (pending & (1 << 0))
@@ -61,7 +73,8 @@ void __visible EXTI0_1_IRQHandler(void)
         hw_counter_exti_irq(1);
 }
 
-void __visible EXTI2_3_IRQHandler(void)
+void
+EXTI2_3_IRQHandler(void)
 {
     uint32_t pending = EXTI->RPR1 | EXTI->FPR1;
     if (pending & (1 << 2))
@@ -70,7 +83,8 @@ void __visible EXTI2_3_IRQHandler(void)
         hw_counter_exti_irq(3);
 }
 
-void __visible EXTI4_15_IRQHandler(void)
+void
+EXTI4_15_IRQHandler(void)
 {
     uint32_t pending = EXTI->RPR1 | EXTI->FPR1;
     for (uint8_t i = 4; i <= 15; i++) {
@@ -85,7 +99,7 @@ hw_counter_event(struct timer *timer)
 {
     struct hw_counter *hc = container_of(timer, struct hw_counter, timer);
     
-    // Report count on every timer event
+    // Check if we need to report
     uint32_t time = hc->timer.waketime;
     if (!timer_is_before(time, hc->next_sample_time)) {
         hc->flags |= HWC_PENDING;
@@ -105,24 +119,21 @@ command_config_hw_counter(uint32_t *args)
         args[0], command_config_hw_counter, sizeof(*hc));
     uint32_t pin_num = args[1];
     uint8_t pull_up = args[2];
+    uint8_t exti_line = pin_num % 16;
     
-    // Get EXTI line (same as pin number within port) - must be calculated first
-    uint8_t exti_line = GPIO2BIT(pin_num);
-    
-    // Validate EXTI line is in bounds
-    if (exti_line >= 16)
+    if (exti_line >= ARRAY_SIZE(exti_counters))
         shutdown("hw_counter: Invalid EXTI line");
-    
-    // Check if EXTI line is already in use
     if (exti_counters[exti_line])
         shutdown("hw_counter: EXTI line already in use");
-    
+
     // Setup GPIO pin
     hc->pin = gpio_in_setup(pin_num, pull_up);
     hc->count = 0;
     hc->last_count_time = 0;
     hc->flags = 0;
     hc->timer.func = hw_counter_event;
+    
+    // Get EXTI line (same as pin number within port)
     hc->exti_line = exti_line;
     
     // Get port number (0=A, 1=B, 2=C, etc.)
@@ -130,32 +141,31 @@ command_config_hw_counter(uint32_t *args)
     
     // Enable SYSCFG clock
     RCC->APBENR2 |= RCC_APBENR2_SYSCFGEN;
-    
-    // Configure SYSCFG EXTICR to map this pin to this EXTI line
-    // STM32G0: 4 bits per EXTI line, 4 lines per register
-    uint8_t reg_idx = exti_line / 4;
-    uint8_t bit_pos = (exti_line % 4) * 4;  // 4 bits per line
-    uint32_t *exticr = &SYSCFG->EXTICR[reg_idx];
-    *exticr = (*exticr & ~(0xF << bit_pos)) | (port << bit_pos);
-    
-    // Configure EXTI line for both edges
-    EXTI->RTSR1 |= (1 << exti_line);  // Rising edge trigger
-    EXTI->FTSR1 |= (1 << exti_line);  // Falling edge trigger
-    EXTI->IMR1 |= (1 << exti_line);   // Unmask interrupt
-    
-    // Store counter in global array for IRQ handler
+
+    uint32_t mask = 1 << exti_line;
+    EXTI->IMR1 &= ~mask;
+    EXTI->RTSR1 &= ~mask;
+    EXTI->FTSR1 &= ~mask;
+    EXTI->RPR1 = mask;
+    EXTI->FPR1 = mask;
+
+    hw_counter_configure_exti_source(exti_line, port);
+
+    // Store counter before enabling interrupts
     exti_counters[exti_line] = hc;
-    
-    // Enable NVIC interrupt
+
+    // Configure EXTI line for rising edge only (one pulse per magnet pass)
+    EXTI->RTSR1 |= mask;  // Rising edge trigger
+    // EXTI->FTSR1 |= mask;  // Falling edge trigger (DISABLED - only use rising)
+    EXTI->IMR1 |= mask;   // Unmask interrupt
+
+    // Enable NVIC interrupt using Klipper's armcm_enable_irq macro
     if (exti_line <= 1) {
-        NVIC_SetPriority(EXTI0_1_IRQn, 0);
-        NVIC_EnableIRQ(EXTI0_1_IRQn);
+        armcm_enable_irq(EXTI0_1_IRQHandler, EXTI0_1_IRQn, 0);
     } else if (exti_line <= 3) {
-        NVIC_SetPriority(EXTI2_3_IRQn, 0);
-        NVIC_EnableIRQ(EXTI2_3_IRQn);
+        armcm_enable_irq(EXTI2_3_IRQHandler, EXTI2_3_IRQn, 0);
     } else {
-        NVIC_SetPriority(EXTI4_15_IRQn, 0);
-        NVIC_EnableIRQ(EXTI4_15_IRQn);
+        armcm_enable_irq(EXTI4_15_IRQHandler, EXTI4_15_IRQn, 0);
     }
 }
 DECL_COMMAND(command_config_hw_counter,
@@ -168,13 +178,22 @@ command_query_hw_counter(uint32_t *args)
     sched_del_timer(&hc->timer);
     hc->timer.waketime = args[1];
     hc->sample_ticks = args[2];
-    // Initialize next_sample_time to 0 so first event triggers immediately
     hc->next_sample_time = 0;
     
     sched_add_timer(&hc->timer);
 }
 DECL_COMMAND(command_query_hw_counter,
              "query_hw_counter oid=%c clock=%u sample_ticks=%u");
+
+void
+command_force_hw_counter(uint32_t *args)
+{
+    struct hw_counter *hc = oid_lookup(args[0], command_config_hw_counter);
+    hc->flags |= HWC_PENDING;
+    sched_wake_task(&hw_counter_wake);
+}
+DECL_COMMAND(command_force_hw_counter,
+             "force_hw_counter oid=%c");
 
 void
 hw_counter_task(void)

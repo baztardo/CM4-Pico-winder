@@ -67,6 +67,7 @@ class AngleSensor:
         # Last values
         self.last_angle_value = None
         self.last_angle_time = None
+        self._last_raw_adc = None  # Store last RAW ADC for calibration
         
         # Hall sensor reference (for saturation handling)
         self.spindle_hall = None
@@ -108,6 +109,9 @@ class AngleSensor:
     
     def _adc_callback(self, read_time, read_value):
         """ADC callback - processes angle sensor readings"""
+        # Store RAW ADC for calibration access
+        self._last_raw_adc = read_value
+        
         # DEBUG: Log every callback to verify it's being called
         if not hasattr(self, '_callback_count'):
             self._callback_count = 0
@@ -125,11 +129,11 @@ class AngleSensor:
             
             self._angle_calibration_samples += 1
             
-            # Calibrate after 100 samples or when we see full range
-            if self._angle_calibration_samples >= 100 or (
-                self._angle_adc_observed_min is not None and 
+            # Calibrate ONLY when we see a significant range (at least 40% of ADC span)
+            # This ensures the spindle has actually rotated before we lock in the calibration
+            if (self._angle_adc_observed_min is not None and 
                 self._angle_adc_observed_max is not None and
-                (self._angle_adc_observed_max - self._angle_adc_observed_min) > 0.5
+                (self._angle_adc_observed_max - self._angle_adc_observed_min) > 0.4
             ):
                 self._angle_calibration_complete = True
                 reactor = self.printer.get_reactor()
