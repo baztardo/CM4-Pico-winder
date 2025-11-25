@@ -41,7 +41,7 @@ class HardwareCounter:
     def build_config(self):
         """Configure MCU hardware counter"""
         # Send config command with pull_up parameter
-        self._mcu.add_config_cmd("config_hw_counter oid=%d pin=%s pull_up=%d"
+        self._mcu.add_config_cmd("config_hw_counter oid=%c pin=%u pull_up=%c"
                                 % (self._oid, self._pin, self._pullup))
         
         # Calculate sample ticks
@@ -51,7 +51,7 @@ class HardwareCounter:
         clock = self._mcu.get_query_slot(self._oid)
         
         # Send query command
-        self._mcu.add_config_cmd("query_hw_counter oid=%d clock=%d sample_ticks=%d"
+        self._mcu.add_config_cmd("query_hw_counter oid=%c clock=%u sample_ticks=%u"
                                 % (self._oid, clock, self._sample_ticks), 
                                 is_init=True)
         

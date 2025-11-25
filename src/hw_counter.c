@@ -13,7 +13,7 @@
 #include "command.h" // DECL_COMMAND
 #include "sched.h" // struct timer
 #include "basecmd.h" // oid_alloc
-#include "internal.h" // GPIO2PORT, GPIO2BIT
+#include "board/internal.h" // GPIO2PORT, GPIO2BIT, STM32 registers
 
 #if CONFIG_MACH_STM32G0
 
@@ -85,9 +85,9 @@ hw_counter_event(struct timer *timer)
 {
     struct hw_counter *hc = container_of(timer, struct hw_counter, timer);
     
-    // Check if we need to report
+    // Report count on every timer event
     uint32_t time = hc->timer.waketime;
-    if (timer_is_before(hc->next_sample_time, time)) {
+    if (!timer_is_before(time, hc->next_sample_time)) {
         hc->flags |= HWC_PENDING;
         hc->next_sample_time = time + hc->sample_ticks;
         sched_wake_task(&hw_counter_wake);
@@ -106,15 +106,23 @@ command_config_hw_counter(uint32_t *args)
     uint32_t pin_num = args[1];
     uint8_t pull_up = args[2];
     
+    // Get EXTI line (same as pin number within port) - must be calculated first
+    uint8_t exti_line = GPIO2BIT(pin_num);
+    
+    // Validate EXTI line is in bounds
+    if (exti_line >= 16)
+        shutdown("hw_counter: Invalid EXTI line");
+    
+    // Check if EXTI line is already in use
+    if (exti_counters[exti_line])
+        shutdown("hw_counter: EXTI line already in use");
+    
     // Setup GPIO pin
     hc->pin = gpio_in_setup(pin_num, pull_up);
     hc->count = 0;
     hc->last_count_time = 0;
     hc->flags = 0;
     hc->timer.func = hw_counter_event;
-    
-    // Get EXTI line (same as pin number within port)
-    uint8_t exti_line = GPIO2BIT(pin_num);
     hc->exti_line = exti_line;
     
     // Get port number (0=A, 1=B, 2=C, etc.)
@@ -160,7 +168,8 @@ command_query_hw_counter(uint32_t *args)
     sched_del_timer(&hc->timer);
     hc->timer.waketime = args[1];
     hc->sample_ticks = args[2];
-    hc->next_sample_time = hc->timer.waketime;
+    // Initialize next_sample_time to 0 so first event triggers immediately
+    hc->next_sample_time = 0;
     
     sched_add_timer(&hc->timer);
 }
