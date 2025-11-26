@@ -292,11 +292,7 @@ class WinderControl:
     
     def _start_winding_layer(self, start_y, end_y, traverse_speed, layers):
         """Start winding layer motion with proper back-and-forth using non-blocking callbacks"""
-        toolhead = self.printer.lookup_object('toolhead')
         reactor = self.printer.get_reactor()
-        
-        # Set max velocity for sync algorithm
-        toolhead.set_max_velocities(traverse_speed * 1.1, None, None, None)
         
         # State for the winding loop
         self.winding_state = {
@@ -324,7 +320,7 @@ class WinderControl:
             self.stop_winding()
             return
         
-        toolhead = self.printer.lookup_object('toolhead')
+        gcode = self.printer.lookup_object('gcode')
         
         # Determine target position based on direction
         moving_forward = state['direction'] == 'forward'
@@ -340,23 +336,28 @@ class WinderControl:
         state['current_pass'] += 1
         self.current_layer = state['current_pass']
         
-        # Queue the move
-        toolhead.manual_move([None, target_y, None, None], state['traverse_speed'])
+        # Queue the move using G-code (uses proper trapezoid acceleration!)
+        # Convert mm/s to mm/min for F parameter
+        feedrate_mm_min = state['traverse_speed'] * 60.0
+        gcode.run_script_from_command("G1 Y%.3f F%.1f" % (target_y, feedrate_mm_min))
+        
+        # Get toolhead to register callback for when move completes
+        toolhead = self.printer.lookup_object('toolhead')
         
         # Update direction for next move
         if state['current_pass'] >= state['total_passes']:
             logging.info("WinderControl: Winding complete - %d layers finished" % state['total_passes'])
-            def stop_after_move(print_time):
+            # Stop winding after move completes
+            def stop_callback(print_time):
                 reactor = self.printer.get_reactor()
                 reactor.register_callback(lambda et: self.stop_winding(), reactor.monotonic() + 0.1)
-            toolhead.register_lookahead_callback(stop_after_move)
+            toolhead.register_lookahead_callback(stop_callback)
             return
         
         state['direction'] = next_direction
         
-        # Schedule next move using lookahead callback (non-blocking)
+        # Schedule next move AFTER current move completes (using lookahead callback)
         def schedule_next_move(print_time):
-            """Callback to schedule next move after current move completes"""
             reactor = self.printer.get_reactor()
             reactor.register_callback(lambda et: self._execute_next_winding_move(), reactor.monotonic() + 0.1)
         

@@ -126,7 +126,11 @@ class HardwareCounter:
         if self._force_cmd is None:
             return
         self._force_cmd.send([self._oid])
-        self.printer.get_reactor().pause(self._sample_time * 1.5)
+        # Don't pause during shutdown - reactor.pause() will fail
+        try:
+            self.printer.get_reactor().pause(self._sample_time * 1.5)
+        except:
+            pass  # Ignore errors during shutdown
     
     def reset_count(self):
         """Reset count to zero"""
