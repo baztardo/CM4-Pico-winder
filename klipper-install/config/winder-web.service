@@ -1,0 +1,15 @@
+[Unit]
+Description=Winder Web Interface
+After=network.target
+
+[Service]
+Type=simple
+User=winder
+WorkingDirectory=/home/winder/web-interface
+ExecStart=/usr/bin/python3 -m http.server 8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

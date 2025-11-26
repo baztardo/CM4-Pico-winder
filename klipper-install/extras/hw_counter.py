@@ -140,16 +140,16 @@ class HardwareCounter:
         logging.info("HardwareCounter: Count reset to 0")
     
     def get_rpm(self):
-        """Calculate RPM from edge count (compatible with spindle_hall interface)"""
+        """Calculate RPM from edge count with smoothing"""
         # Calculate RPM from recent count changes
         if hasattr(self, '_last_rpm_time') and hasattr(self, '_last_rpm_count'):
             current_time = self.printer.get_reactor().monotonic()
             time_delta = current_time - self._last_rpm_time
             count_delta = self._count - self._last_rpm_count
             
-            if time_delta > 0.1 and count_delta > 0:  # At least 100ms between calculations
-                # 2 edges per revolution (rising + falling)
-                revolutions = count_delta / 2.0
+            if time_delta > 2.0 and count_delta > 0:  # 2 seconds between calculations = MAXIMUM ACCURACY
+                # 1 pulse per revolution (rising edge only)
+                revolutions = count_delta
                 rpm = (revolutions / time_delta) * 60.0
                 
                 # Update for next calculation
@@ -170,7 +170,7 @@ class HardwareCounter:
         """Get frequency in Hz (compatible with spindle_hall interface)"""
         rpm = self.get_rpm()
         if rpm > 0:
-            return (rpm / 60.0) * 2.0  # 2 edges per revolution
+            return rpm / 60.0  # 1 pulse per revolution
         return 0.0
     
     def _log_calibration_data(self):
@@ -294,11 +294,16 @@ class HardwareCounter:
             gcmd.respond_info("Usage: CALIBRATE_ANGLE_SENSOR ACTION=START|STOP")
 
 def load_config(config):
-    return HardwareCounter(
-        config.get_printer(),
+    printer = config.get_printer()
+    hw_counter = HardwareCounter(
+        printer,
         config.get('pin'),
         config.getfloat('sample_time', 0.1, above=0.01)
     )
+    # Register with printer so Moonraker can see it
+    name = config.get_name().split()[-1] if ' ' in config.get_name() else 'hw_counter'
+    printer.add_object(name, hw_counter)
+    return hw_counter
 
 def load_config_prefix(config):
     return load_config(config)
