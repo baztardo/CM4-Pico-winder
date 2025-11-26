@@ -1,0 +1,80 @@
+--------------------------------------------------------------------------------
+HALL PULSES:
+  Total samples: 90
+--------------------------------------------------------------------------------
+RAW ADC AT HALL PULSES:
+  Mean: 0.741449
+  Std dev: 0.146506 (±19.76%)
+  Min: 0.428266
+  Max: 0.966606
+  Range: 0.538339 (53.83% of full scale)
+  ✗ WARNING: High variation (±0.1465)
+--------------------------------------------------------------------------------
+RAW ADC RANGE (during entire run):
+  Min: 0.428266
+  Max: 0.966606
+  Span: 0.538339 (53.83% of full scale)
+  ✗ WARNING: Sensor approaching saturation!
+--------------------------------------------------------------------------------
+ANGLE AT HALL PULSES:
+  Mean: 104.63°
+  Std dev: 130.72°
+  Min: 0.00°
+  Max: 358.41°
+  Range: 358.41°
+  ✗ BAD: Too much variation (±130.7°)
+================================================================================
+RAW ADC: 0.741449 (±0.146506) | Angle: 104.63° (±130.72°)
+Angle sensor ADC callback #16600: time=170.080, value=0.986691
+Stats 26109.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12495 bytes_read=274712 bytes_retransmit=9 bytes_invalid=0 send_seq=1048 receive_seq=1048 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000024 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.04 cputime=5.070 memavail=573020
+webhooks client 547951042512: Disconnected
+Angle sensor ADC callback #16700: time=171.080, value=0.986569
+Stats 26110.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12529 bytes_read=276404 bytes_retransmit=9 bytes_invalid=0 send_seq=1051 receive_seq=1051 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000024 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.04 cputime=5.094 memavail=579604
+Angle sensor ADC callback #16800: time=172.080, value=0.987118
+Stats 26111.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12563 bytes_read=278096 bytes_retransmit=9 bytes_invalid=0 send_seq=1054 receive_seq=1054 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000022 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.04 cputime=5.106 memavail=579648
+Angle sensor ADC callback #16900: time=173.080, value=0.987668
+Stats 26112.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12597 bytes_read=279788 bytes_retransmit=9 bytes_invalid=0 send_seq=1057 receive_seq=1057 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000020 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.04 cputime=5.121 memavail=578948
+Angle sensor ADC callback #17000: time=174.080, value=0.986264
+Stats 26113.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12631 bytes_read=281480 bytes_retransmit=9 bytes_invalid=0 send_seq=1060 receive_seq=1060 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000020 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.04 cputime=5.132 memavail=578892
+Angle sensor ADC callback #17100: time=175.080, value=0.986264
+Stats 26114.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12665 bytes_read=283187 bytes_retransmit=9 bytes_invalid=0 send_seq=1063 receive_seq=1063 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000018 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.04 cputime=5.142 memavail=578892
+Angle sensor ADC callback #17200: time=176.080, value=0.986752
+Stats 26115.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12699 bytes_read=284894 bytes_retransmit=9 bytes_invalid=0 send_seq=1066 receive_seq=1066 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.04 cputime=5.161 memavail=578892
+Angle sensor ADC callback #17300: time=177.080, value=0.987607
+Stats 26116.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12733 bytes_read=286586 bytes_retransmit=9 bytes_invalid=0 send_seq=1069 receive_seq=1069 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.185 memavail=578892
+Angle sensor ADC callback #17400: time=178.080, value=0.986752
+Stats 26117.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12767 bytes_read=288278 bytes_retransmit=9 bytes_invalid=0 send_seq=1072 receive_seq=1072 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.209 memavail=578892
+Angle sensor ADC callback #17500: time=179.080, value=0.986874
+Stats 26118.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12801 bytes_read=289970 bytes_retransmit=9 bytes_invalid=0 send_seq=1075 receive_seq=1075 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.233 memavail=578892
+Angle sensor ADC callback #17600: time=180.080, value=0.986203
+Stats 26119.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12841 bytes_read=291693 bytes_retransmit=9 bytes_invalid=0 send_seq=1079 receive_seq=1079 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.257 memavail=578668
+Angle sensor ADC callback #17700: time=181.080, value=0.987118
+Stats 26120.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12875 bytes_read=293385 bytes_retransmit=9 bytes_invalid=0 send_seq=1082 receive_seq=1082 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.281 memavail=578668
+Angle sensor ADC callback #17800: time=182.080, value=0.986264
+Stats 26121.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12909 bytes_read=295077 bytes_retransmit=9 bytes_invalid=0 send_seq=1085 receive_seq=1085 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.305 memavail=578668
+Angle sensor ADC callback #17900: time=183.080, value=0.986996
+Stats 26122.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12943 bytes_read=296769 bytes_retransmit=9 bytes_invalid=0 send_seq=1088 receive_seq=1088 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.329 memavail=578668
+Angle sensor ADC callback #18000: time=184.080, value=0.985958
+Stats 26123.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=12977 bytes_read=298461 bytes_retransmit=9 bytes_invalid=0 send_seq=1091 receive_seq=1091 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.352 memavail=578668
+Angle sensor ADC callback #18100: time=185.080, value=0.988156
+Stats 26124.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13011 bytes_read=300168 bytes_retransmit=9 bytes_invalid=0 send_seq=1094 receive_seq=1094 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.376 memavail=578668
+Angle sensor ADC callback #18200: time=186.080, value=0.986630
+Stats 26125.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13045 bytes_read=301873 bytes_retransmit=9 bytes_invalid=0 send_seq=1097 receive_seq=1097 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.400 memavail=578668
+Angle sensor ADC callback #18300: time=187.080, value=0.986630
+Stats 26126.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13079 bytes_read=303565 bytes_retransmit=9 bytes_invalid=0 send_seq=1100 receive_seq=1100 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.424 memavail=578668
+Angle sensor ADC callback #18400: time=188.080, value=0.986752
+Stats 26127.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13113 bytes_read=305257 bytes_retransmit=9 bytes_invalid=0 send_seq=1103 receive_seq=1103 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.448 memavail=578668
+Angle sensor ADC callback #18500: time=189.080, value=0.986813
+Stats 26128.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13147 bytes_read=306964 bytes_retransmit=9 bytes_invalid=0 send_seq=1106 receive_seq=1106 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.474 memavail=578676
+Angle sensor ADC callback #18600: time=190.080, value=0.986569
+Stats 26129.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13181 bytes_read=308671 bytes_retransmit=9 bytes_invalid=0 send_seq=1109 receive_seq=1109 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.499 memavail=578676
+Angle sensor ADC callback #18700: time=191.080, value=0.986447
+Stats 26130.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13215 bytes_read=310363 bytes_retransmit=9 bytes_invalid=0 send_seq=1112 receive_seq=1112 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.03 cputime=5.523 memavail=578676
+Angle sensor ADC callback #18800: time=192.080, value=0.987118
+Stats 26131.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13249 bytes_read=312055 bytes_retransmit=9 bytes_invalid=0 send_seq=1115 receive_seq=1115 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.02 cputime=5.547 memavail=578676
+Angle sensor ADC callback #18900: time=193.080, value=0.986813
+Stats 26132.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13283 bytes_read=313747 bytes_retransmit=9 bytes_invalid=0 send_seq=1118 receive_seq=1118 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.02 cputime=5.571 memavail=578676
+Angle sensor ADC callback #19000: time=194.080, value=0.987179
+Stats 26133.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13317 bytes_read=315439 bytes_retransmit=9 bytes_invalid=0 send_seq=1121 receive_seq=1121 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000017 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.02 cputime=5.595 memavail=578676
+Angle sensor ADC callback #19100: time=195.080, value=0.986081
+Stats 26134.9: gcodein=0 mcu: mcu_awake=0.021 mcu_task_avg=0.000012 mcu_task_stddev=0.000009 bytes_write=13351 bytes_read=317146 bytes_retransmit=9 bytes_invalid=0 send_seq=1124 receive_seq=1124 retransmit_seq=2 srtt=0.000 rttvar=0.000 rto=0.025 ready_bytes=0 upcoming_bytes=0 freq=64000018 print_time=166.322 buffer_time=0.000 print_stall=1 sysload=0.02 cputime=5.619 memavail=578676
