@@ -54,8 +54,8 @@ def main():
     
     # Query all sensors
     sensors = [
-        ("QUERY_ANGLE_SENSOR", "Angle Sensor"),
-        ("QUERY_SPINDLE_HALL", "Spindle Hall"),
+        ("QUERY_HW_COUNTER COUNTER=spindle_hall", "Spindle Hall"),
+        ("QUERY_HW_COUNTER COUNTER=bldc_hall", "BLDC Hall"),
         ("QUERY_WINDER", "Winder Control"),
     ]
     

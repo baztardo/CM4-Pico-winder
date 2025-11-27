@@ -400,26 +400,34 @@
         }
         
         function parseSensorData(text) {
-            // Parse QUERY_ANGLE_SENSOR response
-            const angleMatch = text.match(/Angle:\s*([\d.]+)°/);
-            const turnsMatch = text.match(/Turns:\s*(\d+)/);
-            
-            if (angleMatch) {
-                document.getElementById('angleValue').textContent = parseFloat(angleMatch[1]).toFixed(1) + '°';
+            // Parse QUERY_HW_COUNTER response for spindle_hall
+            if (text.includes("spindle_hall")) {
+                const countMatch = text.match(/Count:\s*(\d+)/);
+                const rpmMatch = text.match(/RPM:\s*([\d.]+)/);
+                const turnsMatch = text.match(/Turns:\s*([\d.]+)/);
+                
+                if (countMatch) {
+                    document.getElementById('hallCount').textContent = countMatch[1];
+                }
+                if (rpmMatch) {
+                    document.getElementById('spindleRPM').textContent = parseFloat(rpmMatch[1]).toFixed(1);
+                }
+                if (turnsMatch) {
+                    document.getElementById('turnCount').textContent = parseFloat(turnsMatch[1]).toFixed(1);
+                }
             }
-            if (turnsMatch) {
-                document.getElementById('turnCount').textContent = turnsMatch[1];
-            }
             
-            // Parse QUERY_HW_COUNTER response
-            const hallMatch = text.match(/Count:\s*(\d+)/);
-            const rpmMatch = text.match(/RPM:\s*([\d.]+)/);
-            
-            if (hallMatch) {
-                document.getElementById('hallCount').textContent = hallMatch[1];
-            }
-            if (rpmMatch) {
-                document.getElementById('spindleRPM').textContent = parseFloat(rpmMatch[1]).toFixed(1);
+            // Parse QUERY_HW_COUNTER response for bldc_hall
+            if (text.includes("bldc_hall")) {
+                const countMatch = text.match(/Count:\s*(\d+)/);
+                const turnsMatch = text.match(/Turns:\s*([\d.]+)/);
+                
+                if (countMatch) {
+                    document.getElementById('angleValue').textContent = countMatch[1] + ' pulses';
+                }
+                if (turnsMatch) {
+                    // Could display BLDC turns somewhere if needed
+                }
             }
         }
         
@@ -517,8 +525,8 @@
         }
         
         function querySensors() {
-            sendGcode('QUERY_ANGLE_SENSOR');
-            sendGcode('QUERY_HW_COUNTER');
+            sendGcode('QUERY_HW_COUNTER COUNTER=spindle_hall');
+            sendGcode('QUERY_HW_COUNTER COUNTER=bldc_hall');
         }
         
         function subscribeToObjects() {

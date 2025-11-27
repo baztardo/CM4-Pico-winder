@@ -20,6 +20,7 @@ class WinderControl:
         bldc_name = config.get('bldc_motor', 'bldc_motor')
         angle_name = config.get('angle_sensor', 'angle_sensor')
         hall_name = config.get('spindle_hall', 'spindle_hall')
+        bldc_hall_name = config.get('bldc_hall', None)  # Optional BLDC hall counter
         traverse_name = config.get('traverse', 'traverse')
         
         try:
@@ -38,6 +39,15 @@ class WinderControl:
         except Exception:
             logging.warning("WinderControl: Spindle Hall sensor '%s' not found" % hall_name)
             self.spindle_hall = None
+        
+        # Optional BLDC hall counter (36 pulses/rev for position feedback)
+        self.bldc_hall = None
+        if bldc_hall_name:
+            try:
+                self.bldc_hall = self.printer.lookup_object(bldc_hall_name)
+                logging.info("WinderControl: BLDC Hall counter '%s' connected" % bldc_hall_name)
+            except Exception:
+                logging.warning("WinderControl: BLDC Hall counter '%s' not found" % bldc_hall_name)
         
         try:
             self.traverse = self.printer.lookup_object(traverse_name)
@@ -374,8 +384,13 @@ class WinderControl:
         hall_turns_raw = 0
         measured_rpm = 0.0
         
-        # Prioritize Hall sensor for RPM (more reliable than angle sensor)
-        if self.spindle_hall and hasattr(self.spindle_hall, 'get_count'):
+        # Prioritize BLDC Hall for turns (18x resolution), fallback to spindle hall
+        if self.bldc_hall and hasattr(self.bldc_hall, 'get_count'):
+            hall_turns_raw = self.bldc_hall.get_count()
+            # BLDC hall: 18 pulses/rev
+            hall_turns = int(hall_turns_raw / 18.0)
+            measured_rpm = self.bldc_hall.get_rpm(18)
+        elif self.spindle_hall and hasattr(self.spindle_hall, 'get_count'):
             hall_turns_raw = self.spindle_hall.get_count()
             # Apply correction factor to compensate for missed edges
             hall_turns = int(hall_turns_raw * self.hall_sensor_correction)

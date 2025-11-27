@@ -136,12 +136,11 @@ class Panel(ScreenPanel):
         """Query and update sensor values"""
         import time
         
-        # Query angle sensor
+        # Query hardware counters
         try:
-            # This would query the actual sensor status from Klipper
-            # For now, using placeholder
-            self._screen._ws.klippy.gcode_script("QUERY_ANGLE_SENSOR")
-            self._screen._ws.klippy.gcode_script("QUERY_HW_COUNTER")
+            # Query both hardware counters
+            self._screen._ws.klippy.gcode_script("QUERY_HW_COUNTER COUNTER=spindle_hall")
+            self._screen._ws.klippy.gcode_script("QUERY_HW_COUNTER COUNTER=bldc_hall")
             
             # Update timestamp
             current_time = time.strftime("%H:%M:%S")

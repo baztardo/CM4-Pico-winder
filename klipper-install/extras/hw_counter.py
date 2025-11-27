@@ -48,11 +48,7 @@ class HardwareCounter:
         self.calibration_adc_min = None
         self.calibration_adc_max = None
         
-        # G-code commands
-        self.gcode.register_command("QUERY_HW_COUNTER", self.cmd_QUERY_HW_COUNTER,
-                                    desc="Report hardware hall counter status")
-        self.gcode.register_command("CALIBRATE_ANGLE_SENSOR", self.cmd_CALIBRATE_ANGLE_SENSOR,
-                                    desc="Start/stop angle sensor calibration mode")
+        # G-code commands will be registered by load_config() after name is set
     
     def build_config(self):
         """Configure MCU hardware counter"""
@@ -111,15 +107,31 @@ class HardwareCounter:
     
     # G-code helpers
     def cmd_QUERY_HW_COUNTER(self, gcmd):
-        gcmd.respond_info("Hardware Hall Counter:")
+        # Use configured counts_per_revolution (set by load_config)
+        counts_per_rev = getattr(self, 'counts_per_revolution', 1)
+        
+        turns = self.get_turns(counts_per_rev)
+        
+        gcmd.respond_info("Hardware Counter '%s':" % self.name)
         gcmd.respond_info("  Pin: %s" % self._pin)
         gcmd.respond_info("  Count: %d" % self._count)
-        gcmd.respond_info("  Sample time: %.4fs" % self._sample_time)
-        gcmd.respond_info("  RPM: %.2f" % self.get_rpm())
+        gcmd.respond_info("  Counts/rev: %d" % counts_per_rev)
+        gcmd.respond_info("  Turns: %.2f" % turns)
+        gcmd.respond_info("  RPM: %.2f" % self.get_rpm(counts_per_rev))
     
     def get_count(self):
-        """Get current count"""
+        """Get current count (raw pulses)"""
         return self._count
+    
+    def get_turns(self, counts_per_rev=1):
+        """Get turn count
+        
+        Args:
+            counts_per_rev: Number of pulses per revolution
+                1 = Spindle hall (1 pulse/rev)
+                36 = BLDC hall (36 pulses/rev)
+        """
+        return self._count / float(counts_per_rev)
     
     def force_update(self):
         """Request an immediate MCU state report"""
@@ -137,33 +149,49 @@ class HardwareCounter:
         self._count = 0
         self._total_count = 0
         self._last_raw_count = None
-        logging.info("HardwareCounter: Count reset to 0")
+        logging.info("HardwareCounter '%s': Count reset to 0" % self.name)
     
-    def get_rpm(self):
-        """Calculate RPM from edge count with smoothing"""
+    def cmd_RESET_HW_COUNTER(self, gcmd):
+        """Reset counter to zero (G-code command)"""
+        self.reset_count()
+        gcmd.respond_info("Hardware counter '%s' reset to 0" % self.name)
+    
+    def get_rpm(self, counts_per_rev=None):
+        """Calculate RPM from edge count with responsive updates
+
+        Args:
+            counts_per_rev: Pulses per revolution (uses self.counts_per_revolution if not provided)
+        """
+        if counts_per_rev is None:
+            counts_per_rev = getattr(self, 'counts_per_revolution', 1)
+
+        current_time = self.printer.get_reactor().monotonic()
+
+        # Initialize if first call
+        if not hasattr(self, '_last_rpm_time'):
+            self._last_rpm_time = current_time
+            self._last_rpm_count = self._count
+            self._current_rpm = 0.0
+            return 0.0
+
         # Calculate RPM from recent count changes
-        if hasattr(self, '_last_rpm_time') and hasattr(self, '_last_rpm_count'):
-            current_time = self.printer.get_reactor().monotonic()
-            time_delta = current_time - self._last_rpm_time
-            count_delta = self._count - self._last_rpm_count
-            
-            if time_delta > 2.0 and count_delta > 0:  # 2 seconds between calculations = MAXIMUM ACCURACY
-                # 1 pulse per revolution (rising edge only)
-                revolutions = count_delta
+        time_delta = current_time - self._last_rpm_time
+        count_delta = self._count - self._last_rpm_count
+
+        # Update every 0.5 seconds for responsiveness, or immediately if significant change
+        if time_delta >= 0.5 or count_delta >= 10:
+            if count_delta > 0 and time_delta > 0.1:  # Minimum time to avoid divide by zero
+                # Convert pulses to revolutions
+                revolutions = count_delta / float(counts_per_rev)
                 rpm = (revolutions / time_delta) * 60.0
-                
+
                 # Update for next calculation
                 self._last_rpm_time = current_time
                 self._last_rpm_count = self._count
                 self._current_rpm = rpm
                 return rpm
-        
-        # Initialize or return last known RPM
-        if not hasattr(self, '_last_rpm_time'):
-            self._last_rpm_time = self.printer.get_reactor().monotonic()
-            self._last_rpm_count = self._count
-            self._current_rpm = 0.0
-        
+
+        # Return last known RPM if no update needed
         return self._current_rpm if hasattr(self, '_current_rpm') else 0.0
     
     def get_frequency(self):
@@ -295,13 +323,29 @@ class HardwareCounter:
 
 def load_config(config):
     printer = config.get_printer()
+    # Get name from config section FIRST (before creating object)
+    name = config.get_name().split()[-1] if ' ' in config.get_name() else 'hw_counter'
+    
     hw_counter = HardwareCounter(
         printer,
         config.get('pin'),
         config.getfloat('sample_time', 0.1, above=0.01)
     )
+    # Set name BEFORE registering commands
+    hw_counter.name = name
+    
+    # Read counts_per_revolution from config (default to 1 for backward compatibility)
+    hw_counter.counts_per_revolution = config.getint('counts_per_revolution', 1, minval=1)
+    
+    # Now register commands with correct name
+    hw_counter.gcode.register_mux_command("QUERY_HW_COUNTER", "COUNTER", name,
+                                          hw_counter.cmd_QUERY_HW_COUNTER,
+                                          desc="Report hardware hall counter status")
+    hw_counter.gcode.register_mux_command("RESET_HW_COUNTER", "COUNTER", name,
+                                          hw_counter.cmd_RESET_HW_COUNTER,
+                                          desc="Reset hardware counter to zero")
+    
     # Register with printer so Moonraker can see it
-    name = config.get_name().split()[-1] if ' ' in config.get_name() else 'hw_counter'
     printer.add_object(name, hw_counter)
     return hw_counter
 
